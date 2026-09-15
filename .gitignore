@@ -1,0 +1,26 @@
+# Binaries
+*.exe
+*.exe.
+*.dll
+*.so
+*.dylib
+codegraph
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Workspaces
+_workspaces/
+
+# OS / Environment
+.env
+.env.*
+.DS_Store
+Thumbs.db
+
+# Frontend / Node / Scratch
+frontend/node_modules/
+frontend/.next/
+scratch/

@@ -1,0 +1,298 @@
+{
+  "version": "1.0.0",
+  "cases": [
+    {
+      "id": "case-01",
+      "query": "Where is EvidencePackage defined?",
+      "expected_intent": "SYMBOL_LOOKUP",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "EvidencePackage",
+        "internal/models/retrieval.go"
+      ],
+      "description": "Lookup definition location of EvidencePackage symbol"
+    },
+    {
+      "id": "case-02",
+      "query": "Find definition of HybridRetrieverEngine",
+      "expected_intent": "SYMBOL_LOOKUP",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "HybridRetrieverEngine",
+        "internal/retrieval/hybrid.go"
+      ],
+      "description": "Lookup definition of HybridRetrieverEngine struct"
+    },
+    {
+      "id": "case-03",
+      "query": "Show declaration of Location struct",
+      "expected_intent": "SYMBOL_LOOKUP",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "Location",
+        "internal/models/models.go"
+      ],
+      "description": "Lookup Location struct declaration"
+    },
+    {
+      "id": "case-04",
+      "query": "Who calls BuildGroundedContext?",
+      "expected_intent": "CALLER_QUERY",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "BuildGroundedContext",
+        "GroundedExplanationService",
+        "internal/llm/service.go"
+      ],
+      "description": "Find all callers invoking BuildGroundedContext"
+    },
+    {
+      "id": "case-05",
+      "query": "What functions call ValidateItem?",
+      "expected_intent": "CALLER_QUERY",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "ValidateItem",
+        "AddItem",
+        "DefaultEvidencePackager"
+      ],
+      "description": "Find callers of RepositoryScope.ValidateItem"
+    },
+    {
+      "id": "case-06",
+      "query": "What does FinalizePackage call?",
+      "expected_intent": "CALLEE_QUERY",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "FinalizePackage",
+        "EstimateTokens",
+        "Citation"
+      ],
+      "description": "Find outgoing function calls from FinalizePackage"
+    },
+    {
+      "id": "case-07",
+      "query": "What functions does NewHybridRetrieverEngine invoke?",
+      "expected_intent": "CALLEE_QUERY",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "NewRuleBasedIntentClassifier",
+        "HybridRetrieverEngine"
+      ],
+      "description": "Find callees of NewHybridRetrieverEngine constructor"
+    },
+    {
+      "id": "case-08",
+      "query": "What packages does internal/retrieval depend on?",
+      "expected_intent": "DEPENDENCY_QUERY",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "internal/models",
+        "internal/graph",
+        "internal/storage"
+      ],
+      "description": "Find module import dependencies of retrieval package"
+    },
+    {
+      "id": "case-09",
+      "query": "What dependencies does internal/llm have?",
+      "expected_intent": "DEPENDENCY_QUERY",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "internal/models",
+        "internal/retrieval"
+      ],
+      "description": "Find module imports for llm package"
+    },
+    {
+      "id": "case-10",
+      "query": "What components are affected if I modify internal/models/retrieval.go?",
+      "expected_intent": "IMPACT_QUERY",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "internal/retrieval",
+        "internal/llm",
+        "internal/analysis"
+      ],
+      "description": "Transitive impact analysis for retrieval models modification"
+    },
+    {
+      "id": "case-11",
+      "query": "What files depend on internal/graph/engine.go?",
+      "expected_intent": "IMPACT_QUERY",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "internal/retrieval",
+        "graph_retriever.go"
+      ],
+      "description": "Impact analysis for graph engine changes"
+    },
+    {
+      "id": "case-12",
+      "query": "How is Reciprocal Rank Fusion calculated?",
+      "expected_intent": "FEATURE_SEARCH",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "RRFScore",
+        "rrfContribution",
+        "internal/retrieval/hybrid.go"
+      ],
+      "description": "Find implementation of RRF mathematical scoring"
+    },
+    {
+      "id": "case-13",
+      "query": "Find line-level snippet truncation logic",
+      "expected_intent": "FEATURE_SEARCH",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "MaxSnippetLines",
+        "internal/retrieval/packager.go"
+      ],
+      "description": "Search snippet line truncation implementation"
+    },
+    {
+      "id": "case-14",
+      "query": "Explain the architecture of the hybrid retriever engine",
+      "expected_intent": "ARCHITECTURE_QUERY",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "HybridRetrieverEngine",
+        "QueryIntentClassifier",
+        "internal/retrieval/hybrid.go"
+      ],
+      "description": "Architectural overview of hybrid retrieval orchestration"
+    },
+    {
+      "id": "case-15",
+      "query": "How does citation validation work in CodeGraph?",
+      "expected_intent": "ARCHITECTURE_QUERY",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "CitationValidator",
+        "Validate",
+        "internal/llm/validator.go"
+      ],
+      "description": "Architectural query on citation validation design"
+    },
+    {
+      "id": "case-16",
+      "query": "Trace execution flow from user query to grounded explanation",
+      "expected_intent": "TRACE",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "Retrieve",
+        "BuildPackage",
+        "BuildGroundedContext",
+        "Explain"
+      ],
+      "description": "Trace end-to-end execution flow through retrieval, packaging, and LLM explanation"
+    },
+    {
+      "id": "case-17",
+      "query": "Trace how evidence sufficiency is evaluated",
+      "expected_intent": "TRACE",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "SufficiencyEvaluator",
+        "Evaluate",
+        "internal/retrieval/sufficiency.go"
+      ],
+      "description": "Trace sufficiency score calculation flow"
+    },
+    {
+      "id": "case-18",
+      "query": "Why does EvidencePackage clone items before adding?",
+      "expected_intent": "EXPLANATION",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "Clone",
+        "immutability",
+        "internal/retrieval/packager.go"
+      ],
+      "description": "Explanation query regarding input immutability guarantee"
+    },
+    {
+      "id": "case-19",
+      "query": "Why are source code strings wrapped in untrusted content boundaries?",
+      "expected_intent": "EXPLANATION",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "UNTRUSTED REPOSITORY CONTENT",
+        "internal/retrieval/context_builder.go"
+      ],
+      "description": "Explanation query regarding prompt injection structural defense"
+    },
+    {
+      "id": "case-20",
+      "query": "Overview of CodeGraph codebase structure",
+      "expected_intent": "GENERAL_REPOSITORY_QUESTION",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "internal/models",
+        "internal/retrieval",
+        "internal/graph",
+        "internal/llm"
+      ],
+      "description": "General overview query of CodeGraph architecture"
+    },
+    {
+      "id": "case-21",
+      "query": "What vector distance metric is used by SQLite store?",
+      "expected_intent": "GENERAL_REPOSITORY_QUESTION",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "CosineDistance",
+        "internal/vector"
+      ],
+      "description": "General repository query regarding vector distance metric"
+    },
+    {
+      "id": "case-22",
+      "query": "How is repository isolation enforced in scope?",
+      "expected_intent": "SYMBOL_LOOKUP",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "RepositoryScope",
+        "ValidateItem",
+        "internal/models/retrieval.go"
+      ],
+      "description": "Lookup RepositoryScope validation contract"
+    },
+    {
+      "id": "case-23",
+      "query": "Who calls LoadGraph?",
+      "expected_intent": "CALLER_QUERY",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "LoadGraph",
+        "GraphRetriever",
+        "internal/retrieval/graph_retriever.go"
+      ],
+      "description": "Callers of graph Engine.LoadGraph"
+    },
+    {
+      "id": "case-24",
+      "query": "What does SanitizeRetrieverError return for timeout?",
+      "expected_intent": "SYMBOL_LOOKUP",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "sanitizeRetrieverError",
+        "EXECUTION_TIMEOUT",
+        "internal/retrieval/hybrid.go"
+      ],
+      "description": "Lookup error code for deadline exceeded in hybrid retriever"
+    },
+    {
+      "id": "case-25",
+      "query": "Where is DefaultEvidenceBudget defined?",
+      "expected_intent": "SYMBOL_LOOKUP",
+      "repository_id": "codegraph",
+      "relevant_ids": [
+        "DefaultEvidenceBudget",
+        "internal/models/retrieval.go"
+      ],
+      "description": "Lookup DefaultEvidenceBudget constructor"
+    }
+  ],
+  "total_cases": 25
+}
