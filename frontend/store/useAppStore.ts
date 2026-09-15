@@ -29,7 +29,7 @@ interface AppState {
   selectedNodeID: string | null;
   highlightLineRange: [number, number] | null;
 
-  // Graph C3 State
+  // Graph C3/C4 State
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
   graphScope: "OVERVIEW" | "NEIGHBORHOOD";
@@ -62,8 +62,17 @@ interface AppState {
   resetGraph: (repoID: string) => Promise<void>;
   toggleExpandPath: (path: string) => void;
   setExpandedPaths: (paths: Set<string>) => void;
+  autoExpandParentPaths: (relativePath: string) => void;
   setSearchQuery: (query: string) => void;
   setActiveTab: (tab: NavigationTab) => void;
+
+  // C4 Synchronization Actions
+  selectGraphNode: (nodeID: string | null) => void;
+  syncSourceFromGraphNode: (nodeID: string) => void;
+  selectSourceFileAndSyncGraph: (relativePath: string) => void;
+  navigateToSourceFromGraph: (nodeID: string, targetTab?: NavigationTab) => void;
+  navigateToGraphFromSource: () => void;
+
   setSelectedPath: (path: string | null) => void;
   setSelectedSymbolID: (id: string | null) => void;
   setSelectedNodeID: (id: string | null) => void;
@@ -410,6 +419,98 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setExpandedPaths: (paths: Set<string>) => {
     set({ expandedPaths: new Set(paths) });
+  },
+
+  autoExpandParentPaths: (relativePath: string) => {
+    if (!relativePath) return;
+    const parts = relativePath.split("/").filter(Boolean);
+    if (parts.length <= 1) return;
+
+    const newAncestors = new Set<string>();
+    let currentPath = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      currentPath = currentPath ? `${currentPath}/${parts[i]}` : parts[i];
+      newAncestors.add(currentPath);
+    }
+
+    set((state) => {
+      const next = new Set(state.expandedPaths);
+      let changed = false;
+      newAncestors.forEach((p) => {
+        if (!next.has(p)) {
+          next.add(p);
+          changed = true;
+        }
+      });
+      return changed ? { expandedPaths: next } : state;
+    });
+  },
+
+  // C4 Synchronization Actions
+  selectGraphNode: (nodeID: string | null) => {
+    set({ selectedNodeID: nodeID });
+
+    // Non-intrusive in GRAPH tab: only sync source automatically in SYNC tab!
+    if (nodeID && get().activeTab === "SYNC") {
+      get().syncSourceFromGraphNode(nodeID);
+    }
+  },
+
+  syncSourceFromGraphNode: (nodeID: string) => {
+    const node = get().graphNodes.find((n) => n.id === nodeID);
+    if (!node) return;
+
+    const repoID = get().activeRepoID;
+    if (!repoID) return;
+
+    if (node.relative_path) {
+      set({ selectedPath: node.relative_path });
+      get().autoExpandParentPaths(node.relative_path);
+      get().fetchSourceFile(repoID, node.relative_path);
+    }
+
+    if (node.kind === "NODE_SYMBOL") {
+      set({ selectedSymbolID: node.id });
+      if (node.location && node.location.start_line > 0 && node.location.end_line >= node.location.start_line) {
+        set({ highlightLineRange: [node.location.start_line, node.location.end_line] });
+      } else {
+        set({ highlightLineRange: null });
+      }
+    } else {
+      set({ selectedSymbolID: null, highlightLineRange: null });
+    }
+  },
+
+  selectSourceFileAndSyncGraph: (relativePath: string) => {
+    const repoID = get().activeRepoID;
+    if (!repoID) return;
+
+    set({
+      selectedPath: relativePath,
+      selectedSymbolID: null,
+      highlightLineRange: null,
+    });
+
+    get().autoExpandParentPaths(relativePath);
+    get().fetchSourceFile(repoID, relativePath);
+
+    // Sync matching file node in graph if present in graphNodes (do NOT fabricate)
+    const matchingFileNode = get().graphNodes.find(
+      (n) => n.kind === "NODE_FILE" && n.relative_path === relativePath
+    );
+
+    if (matchingFileNode) {
+      set({ selectedNodeID: matchingFileNode.id });
+    }
+  },
+
+  navigateToSourceFromGraph: (nodeID: string, targetTab: NavigationTab = "EXPLORER") => {
+    get().syncSourceFromGraphNode(nodeID);
+    set({ activeTab: targetTab });
+  },
+
+  navigateToGraphFromSource: () => {
+    set({ activeTab: "GRAPH" });
   },
 
   setSearchQuery: (query: string) => set({ searchQuery: query }),

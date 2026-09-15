@@ -2,7 +2,7 @@
 
 import React from "react";
 import { FileContentResponse, FileManifestItem } from "@/lib/types";
-import { FileText, ShieldAlert, Binary, AlertTriangle, FileCode2, Copy, Check } from "lucide-react";
+import { FileText, ShieldAlert, Binary, AlertTriangle, FileCode2, Copy, Check, Network } from "lucide-react";
 
 interface SourceViewerProps {
   source: FileContentResponse | null;
@@ -10,6 +10,8 @@ interface SourceViewerProps {
   error: string | null;
   selectedPath: string | null;
   manifestItem?: FileManifestItem;
+  highlightLineRange?: [number, number] | null;
+  onViewInGraph?: () => void;
 }
 
 export const SourceViewer: React.FC<SourceViewerProps> = ({
@@ -18,8 +20,11 @@ export const SourceViewer: React.FC<SourceViewerProps> = ({
   error,
   selectedPath,
   manifestItem,
+  highlightLineRange,
+  onViewInGraph,
 }) => {
   const [copied, setCopied] = React.useState(false);
+  const startRowRef = React.useRef<HTMLTableRowElement | null>(null);
 
   const handleCopy = () => {
     if (source?.content) {
@@ -35,6 +40,27 @@ export const SourceViewer: React.FC<SourceViewerProps> = ({
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
+
+  const lines = source?.content ? source.content.split("\n") : [];
+  const totalLines = lines.length;
+
+  // Validate line range
+  const validRange = React.useMemo(() => {
+    if (!highlightLineRange) return null;
+    const [start, end] = highlightLineRange;
+    if (start < 1 || end < start || start > totalLines) return null;
+    return [start, Math.min(end, totalLines)] as [number, number];
+  }, [highlightLineRange, totalLines]);
+
+  // Auto-scroll to start line when valid range or selectedPath changes
+  React.useEffect(() => {
+    if (validRange && startRowRef.current) {
+      startRowRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+  }, [validRange, selectedPath]);
 
   if (!selectedPath) {
     return (
@@ -108,8 +134,6 @@ export const SourceViewer: React.FC<SourceViewerProps> = ({
     );
   }
 
-  const lines = source?.content ? source.content.split("\n") : [];
-
   return (
     <div className="h-full flex flex-col bg-background overflow-hidden select-text">
       {/* File Header Bar */}
@@ -122,6 +146,23 @@ export const SourceViewer: React.FC<SourceViewerProps> = ({
         </div>
 
         <div className="flex items-center space-x-3 text-xs shrink-0">
+          {onViewInGraph && (
+            <button
+              onClick={onViewInGraph}
+              className="flex items-center space-x-1.5 px-2.5 py-1 rounded border border-border bg-background hover:bg-surface-hover text-gray-200 font-medium text-xs transition"
+              title="Return to Knowledge Graph view"
+            >
+              <Network className="w-3.5 h-3.5 text-accent" />
+              <span>View in Graph</span>
+            </button>
+          )}
+
+          {validRange && (
+            <span className="text-[11px] text-accent font-semibold px-2 py-0.5 bg-accent/10 border border-accent/20 rounded">
+              Lines {validRange[0]}–{validRange[1]}
+            </span>
+          )}
+
           {source?.language && (
             <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-accent/15 border border-accent/30 text-accent">
               {source.language}
@@ -160,9 +201,29 @@ export const SourceViewer: React.FC<SourceViewerProps> = ({
             <tbody>
               {lines.map((lineText, idx) => {
                 const lineNumber = idx + 1;
+                const isHighlighted = validRange
+                  ? lineNumber >= validRange[0] && lineNumber <= validRange[1]
+                  : false;
+
+                const isStartLine = validRange && lineNumber === validRange[0];
+
                 return (
-                  <tr key={lineNumber} className="hover:bg-surface-hover/50 group">
-                    <td className="w-12 text-right pr-4 py-0.5 text-gray-500 select-none bg-surface/30 border-r border-border/50 text-[11px] group-hover:text-gray-300">
+                  <tr
+                    key={lineNumber}
+                    ref={isStartLine ? startRowRef : undefined}
+                    className={
+                      isHighlighted
+                        ? "bg-accent/20 border-l-4 border-accent text-white font-semibold"
+                        : "hover:bg-surface-hover/50 group"
+                    }
+                  >
+                    <td
+                      className={
+                        isHighlighted
+                          ? "w-12 text-right pr-4 py-0.5 text-accent select-none bg-accent/10 border-r border-accent/40 text-[11px] font-bold"
+                          : "w-12 text-right pr-4 py-0.5 text-gray-500 select-none bg-surface/30 border-r border-border/50 text-[11px] group-hover:text-gray-300"
+                      }
+                    >
                       {lineNumber}
                     </td>
                     <td className="pl-4 pr-4 py-0.5 text-gray-200 whitespace-pre">

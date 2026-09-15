@@ -27,9 +27,8 @@ export const GraphExplorer: React.FC = () => {
     setGraphNodeTypesFilter,
     setGraphEdgeTypesFilter,
     resetGraph,
-    setSelectedNodeID,
-    setSelectedPath,
-    setActiveTab,
+    selectGraphNode,
+    navigateToSourceFromGraph,
   } = useAppStore();
 
   const activeRepoID = activeRepo?.id;
@@ -57,9 +56,8 @@ export const GraphExplorer: React.FC = () => {
     }
   };
 
-  const handleViewInExplorer = (path: string) => {
-    setSelectedPath(path);
-    setActiveTab("EXPLORER");
+  const handleViewInExplorer = (nodeID: string) => {
+    navigateToSourceFromGraph(nodeID, "EXPLORER");
   };
 
   const handleResetGraph = () => {
@@ -142,7 +140,7 @@ export const GraphExplorer: React.FC = () => {
               edges={visibleEdges}
               selectedNodeID={selectedNodeID}
               expandedNodeIDs={expandedNodeIDs}
-              onSelectNode={setSelectedNodeID}
+              onSelectNode={(nodeID) => selectGraphNode(nodeID)}
             />
           )}
 

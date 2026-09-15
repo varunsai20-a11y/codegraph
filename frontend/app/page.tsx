@@ -9,6 +9,8 @@ import { GraphExplorer } from "@/components/graph/GraphExplorer";
 import { useAppStore } from "@/store/useAppStore";
 import { AlertTriangle, SplitSquareVertical, GitFork, Bot, Compass } from "lucide-react";
 
+import { SyncWorkspace } from "@/components/sync/SyncWorkspace";
+
 export default function Home() {
   const { activeTab, fetchRepositories, error } = useAppStore();
 
@@ -23,15 +25,7 @@ export default function Home() {
       case "GRAPH":
         return <GraphExplorer />;
       case "SYNC":
-        return (
-          <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none">
-            <SplitSquareVertical className="w-10 h-10 text-gray-500 mb-3" />
-            <h3 className="text-sm font-bold text-gray-200">Synchronized Code & Graph Split Workspace</h3>
-            <p className="text-xs text-gray-400 max-w-sm mt-1">
-              Bi-directional source selection and graph node synchronization will be implemented in Checkpoint 4.
-            </p>
-          </div>
-        );
+        return <SyncWorkspace />;
       case "FLOW":
         return (
           <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none">

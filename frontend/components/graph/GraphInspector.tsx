@@ -20,7 +20,7 @@ interface GraphInspectorProps {
   nodes: GraphNode[];
   edges: GraphEdge[];
   onExpandNode: (nodeID: string) => void;
-  onViewInExplorer: (path: string) => void;
+  onViewInExplorer: (nodeID: string) => void;
   isLoading: boolean;
 }
 
@@ -60,6 +60,8 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
         return <FileCode className="w-4 h-4 text-gray-400 shrink-0" />;
     }
   };
+
+  const isSymbol = selectedNode.kind === "NODE_SYMBOL";
 
   return (
     <div className="h-full flex flex-col justify-between p-4 bg-surface text-xs select-none overflow-y-auto space-y-4">
@@ -140,11 +142,11 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
 
         {selectedNode.relative_path && (
           <button
-            onClick={() => onViewInExplorer(selectedNode.relative_path!)}
+            onClick={() => onViewInExplorer(selectedNode.id)}
             className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-md bg-background border border-border hover:bg-surface-hover text-gray-200 font-medium text-xs transition"
           >
             <FolderTree className="w-3.5 h-3.5 text-accent" />
-            <span>View in Explorer</span>
+            <span>{isSymbol ? "View Source" : "View in Explorer"}</span>
           </button>
         )}
       </div>

@@ -22,6 +22,7 @@ export const RepositoryExplorer: React.FC = () => {
     fileManifest,
     expandedPaths,
     selectedPath,
+    highlightLineRange,
     sourceContent,
     searchQuery,
     isLoadingManifest,
@@ -33,6 +34,7 @@ export const RepositoryExplorer: React.FC = () => {
     setSearchQuery,
     fetchSourceFile,
     fetchFileManifest,
+    navigateToGraphFromSource,
   } = useAppStore();
 
   const activeRepoID = activeRepo?.id;
@@ -187,6 +189,8 @@ export const RepositoryExplorer: React.FC = () => {
             error={sourceError}
             selectedPath={selectedPath}
             manifestItem={selectedManifestItem}
+            highlightLineRange={highlightLineRange}
+            onViewInGraph={navigateToGraphFromSource}
           />
         </div>
       </div>
