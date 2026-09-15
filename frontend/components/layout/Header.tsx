@@ -10,12 +10,12 @@ export const Header: React.FC = () => {
     activeRepoID,
     selectRepository,
     fetchRepositories,
-    isLoading,
+    isLoadingRepos,
     error,
   } = useAppStore();
 
   return (
-    <header className="h-14 border-b border-border bg-surface px-4 flex items-center justify-between select-none">
+    <header className="h-14 border-b border-border bg-surface px-4 flex items-center justify-between select-none shrink-0">
       <div className="flex items-center space-x-3">
         <div className="w-8 h-8 rounded-lg bg-accent/20 border border-accent/40 flex items-center justify-center text-accent">
           <Database className="w-4 h-4" />
@@ -24,7 +24,7 @@ export const Header: React.FC = () => {
           <h1 className="text-sm font-bold tracking-wide text-gray-100 flex items-center gap-2">
             CodeGraph
             <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent/10 border border-accent/30 text-accent font-semibold">
-              Phase 5 C1
+              Phase 5 C2
             </span>
           </h1>
           <p className="text-[11px] text-gray-400">Visual Reverse Engineering</p>
@@ -56,11 +56,11 @@ export const Header: React.FC = () => {
         {/* Refresh Button */}
         <button
           onClick={() => fetchRepositories()}
-          disabled={isLoading}
+          disabled={isLoadingRepos}
           className="p-1.5 rounded-md border border-border hover:bg-surface-hover text-gray-300 hover:text-white transition"
           title="Refresh Repositories"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin text-accent" : ""}`} />
+          <RefreshCw className={`w-3.5 h-3.5 ${isLoadingRepos ? "animate-spin text-accent" : ""}`} />
         </button>
 
         {/* Backend Connection Indicator */}
@@ -81,3 +81,4 @@ export const Header: React.FC = () => {
     </header>
   );
 };
+

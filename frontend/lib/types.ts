@@ -12,6 +12,28 @@ export interface Repository {
   updated_at: string;
 }
 
+export type FileStatus =
+  | "INDEXED"
+  | "IGNORED"
+  | "BINARY"
+  | "SECRET"
+  | "OVERSIZED"
+  | "UNSUPPORTED"
+  | "FAILED";
+
+export interface FileManifestItem {
+  id: string;
+  repository_id: string;
+  relative_path: string;
+  language: string;
+  extension: string;
+  size: number;
+  sha256: string;
+  status: FileStatus;
+  error_message?: string;
+  updated_at: string;
+}
+
 export interface FileContentResponse {
   repository_id: string;
   relative_path: string;
@@ -31,3 +53,12 @@ export interface SourceLocation {
   start_column?: number;
   end_column?: number;
 }
+
+export interface TreeNode {
+  name: string;
+  path: string;
+  isFolder: boolean;
+  children?: TreeNode[];
+  fileItem?: FileManifestItem;
+}
+

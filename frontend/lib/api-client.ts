@@ -1,4 +1,4 @@
-import { Repository, FileContentResponse, APIError } from "./types";
+import { Repository, FileManifestItem, FileContentResponse, APIError } from "./types";
 
 export class CodeGraphAPIClient {
   private baseURL: string;
@@ -15,9 +15,14 @@ export class CodeGraphAPIClient {
     const timeoutMs = options?.timeoutMs || 15000;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    const signal = options?.signal
-      ? AbortSignal.any([options.signal, controller.signal])
-      : controller.signal;
+    let signal = controller.signal;
+    if (options?.signal) {
+      if (typeof AbortSignal.any === "function") {
+        signal = AbortSignal.any([options.signal, controller.signal]);
+      } else {
+        options.signal.addEventListener("abort", () => controller.abort());
+      }
+    }
 
     try {
       const res = await fetch(`${this.baseURL}${endpoint}`, {
@@ -48,6 +53,9 @@ export class CodeGraphAPIClient {
     } catch (err: any) {
       clearTimeout(timeoutId);
       if (err.name === "AbortError") {
+        if (options?.signal?.aborted) {
+          throw new Error("Request cancelled");
+        }
         throw new Error(`Request to ${endpoint} timed out after ${timeoutMs}ms`);
       }
       throw err;
@@ -62,6 +70,10 @@ export class CodeGraphAPIClient {
     return this.request<Repository>(`/api/repositories/${id}`, { signal });
   }
 
+  async getRepositoryFiles(id: string, signal?: AbortSignal): Promise<FileManifestItem[]> {
+    return this.request<FileManifestItem[]>(`/api/repositories/${id}/files`, { signal });
+  }
+
   async getFileContent(
     id: string,
     relativePath: string,
@@ -73,6 +85,15 @@ export class CodeGraphAPIClient {
       { signal }
     );
   }
+
+  async getSourceFile(
+    id: string,
+    relativePath: string,
+    signal?: AbortSignal
+  ): Promise<FileContentResponse> {
+    return this.getFileContent(id, relativePath, signal);
+  }
 }
 
 export const apiClient = new CodeGraphAPIClient();
+

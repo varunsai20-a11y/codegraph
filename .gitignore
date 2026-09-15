@@ -23,4 +23,6 @@ Thumbs.db
 # Frontend / Node / Scratch
 frontend/node_modules/
 frontend/.next/
+*.tsbuildinfo
 scratch/
+

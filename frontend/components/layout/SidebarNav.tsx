@@ -12,12 +12,12 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { id: "explorer", label: "Explorer", icon: FolderTree, checkpoint: "C2" },
-  { id: "graph", label: "Graph", icon: Network, checkpoint: "C3" },
-  { id: "sync", label: "Code+Graph", icon: SplitSquareVertical, checkpoint: "C4" },
-  { id: "flow", label: "Call Flow", icon: GitFork, checkpoint: "C5" },
-  { id: "ai", label: "AI Workspace", icon: Bot, checkpoint: "C6" },
-  { id: "guide", label: "Guided Tour", icon: Compass, checkpoint: "C7" },
+  { id: "EXPLORER", label: "Explorer", icon: FolderTree, checkpoint: "C2" },
+  { id: "GRAPH", label: "Graph", icon: Network, checkpoint: "C3" },
+  { id: "SYNC", label: "Code+Graph", icon: SplitSquareVertical, checkpoint: "C4" },
+  { id: "FLOW", label: "Call Flow", icon: GitFork, checkpoint: "C5" },
+  { id: "AI", label: "AI Workspace", icon: Bot, checkpoint: "C6" },
+  { id: "GUIDE", label: "Guided Tour", icon: Compass, checkpoint: "C7" },
 ];
 
 export const SidebarNav: React.FC = () => {
@@ -56,7 +56,7 @@ export const SidebarNav: React.FC = () => {
 
       <div className="p-3 border-t border-border text-[11px] text-gray-400">
         <p className="font-semibold text-gray-300">Phase 5 Status</p>
-        <p className="mt-0.5 text-accent font-mono">C1 Foundation Active</p>
+        <p className="mt-0.5 text-accent font-mono">C2 Explorer Active</p>
       </div>
     </aside>
   );
