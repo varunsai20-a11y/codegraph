@@ -303,6 +303,262 @@ func (e *Engine) GetNeighborhood(startNodeID string, maxHops int) ([]*models.Nod
 	return resNodes, resEdges
 }
 
+// QueryParams specifies bounding & filtering parameters for graph traversal.
+type QueryParams struct {
+	StartNodeID string
+	MaxHops     int
+	NodeLimit   int
+	EdgeLimit   int
+	NodeTypes   map[models.NodeKind]bool
+	EdgeTypes   map[models.EdgeKind]bool
+}
+
+func (e *Engine) findNodeByIDOrAlias(id string) (string, *models.Node, bool) {
+	if n, found := e.nodes[id]; found {
+		return id, n, true
+	}
+	kinds := []models.NodeKind{
+		models.NodeKindRepository,
+		models.NodeKindFile,
+		models.NodeKindSymbol,
+		models.NodeKindExternalModule,
+	}
+	for _, k := range kinds {
+		formatted := FormatNodeID(k, e.repoID, id)
+		if n, found := e.nodes[formatted]; found {
+			return formatted, n, true
+		}
+	}
+	// Match by relative path
+	for nodeID, n := range e.nodes {
+		if n.RelativePath != "" && n.RelativePath == id {
+			return nodeID, n, true
+		}
+	}
+	return id, nil, false
+}
+
+// GetOverviewGraph builds a small top-level architectural overview (Repository node, top files & external modules).
+func (e *Engine) GetOverviewGraph(params QueryParams) ([]*models.Node, []*models.Edge) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if params.NodeLimit <= 0 {
+		params.NodeLimit = 20
+	}
+	if params.NodeLimit > 100 {
+		params.NodeLimit = 100
+	}
+	if params.EdgeLimit <= 0 {
+		params.EdgeLimit = 50
+	}
+	if params.EdgeLimit > 200 {
+		params.EdgeLimit = 200
+	}
+
+	var rootNode *models.Node
+	for _, n := range e.nodes {
+		if n.Kind == models.NodeKindRepository {
+			rootNode = n
+			break
+		}
+	}
+
+	if rootNode == nil {
+		// Return up to NodeLimit nodes sorted deterministically
+		var allNodes []*models.Node
+		for _, n := range e.nodes {
+			if len(params.NodeTypes) > 0 && !params.NodeTypes[n.Kind] {
+				continue
+			}
+			allNodes = append(allNodes, n)
+		}
+		sort.Slice(allNodes, func(i, j int) bool { return allNodes[i].ID < allNodes[j].ID })
+		if len(allNodes) > params.NodeLimit {
+			allNodes = allNodes[:params.NodeLimit]
+		}
+		return allNodes, nil
+	}
+
+	nodeMap := make(map[string]*models.Node)
+	nodeMap[rootNode.ID] = rootNode
+
+	// Gather file and external module nodes connected to rootNode or top imports
+	var candidateNodes []*models.Node
+	for _, n := range e.nodes {
+		if n.ID == rootNode.ID {
+			continue
+		}
+		if len(params.NodeTypes) > 0 && !params.NodeTypes[n.Kind] {
+			continue
+		}
+		if n.Kind == models.NodeKindRepository || n.Kind == models.NodeKindFile || n.Kind == models.NodeKindExternalModule {
+			candidateNodes = append(candidateNodes, n)
+		}
+	}
+	sort.Slice(candidateNodes, func(i, j int) bool { return candidateNodes[i].ID < candidateNodes[j].ID })
+
+	for _, n := range candidateNodes {
+		if len(nodeMap) >= params.NodeLimit {
+			break
+		}
+		nodeMap[n.ID] = n
+	}
+
+	var resNodes []*models.Node
+	for _, n := range nodeMap {
+		resNodes = append(resNodes, n)
+	}
+	sort.Slice(resNodes, func(i, j int) bool { return resNodes[i].ID < resNodes[j].ID })
+
+	edgeMap := make(map[string]*models.Edge)
+	for _, n := range resNodes {
+		if len(edgeMap) >= params.EdgeLimit {
+			break
+		}
+		for _, ed := range e.outgoingEdges[n.ID] {
+			if len(edgeMap) >= params.EdgeLimit {
+				break
+			}
+			if len(params.EdgeTypes) > 0 && !params.EdgeTypes[ed.Kind] {
+				continue
+			}
+			if _, srcIn := nodeMap[ed.SourceID]; srcIn {
+				if _, tgtIn := nodeMap[ed.TargetID]; tgtIn {
+					edgeMap[ed.ID] = ed
+				}
+			}
+		}
+	}
+
+	var resEdges []*models.Edge
+	for _, ed := range edgeMap {
+		resEdges = append(resEdges, ed)
+	}
+	sort.Slice(resEdges, func(i, j int) bool { return resEdges[i].ID < resEdges[j].ID })
+
+	return resNodes, resEdges
+}
+
+// GetBoundedNeighborhood returns a BFS neighborhood capped by maxHops, NodeLimit, EdgeLimit, and optional type filters.
+func (e *Engine) GetBoundedNeighborhood(params QueryParams) ([]*models.Node, []*models.Edge) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if params.MaxHops <= 0 {
+		params.MaxHops = 1
+	}
+	if params.NodeLimit <= 0 {
+		params.NodeLimit = 50
+	}
+	if params.NodeLimit > 100 {
+		params.NodeLimit = 100
+	}
+	if params.EdgeLimit <= 0 {
+		params.EdgeLimit = 100
+	}
+	if params.EdgeLimit > 200 {
+		params.EdgeLimit = 200
+	}
+
+	startID, startNode, found := e.findNodeByIDOrAlias(params.StartNodeID)
+	if !found {
+		return nil, nil
+	}
+
+	visitedNodes := make(map[string]bool)
+	visitedEdges := make(map[string]bool)
+	var resNodes []*models.Node
+	var resEdges []*models.Edge
+
+	type queueItem struct {
+		nodeID string
+		depth  int
+	}
+
+	queue := []queueItem{{nodeID: startID, depth: 0}}
+	visitedNodes[startID] = true
+	resNodes = append(resNodes, startNode)
+
+	for len(queue) > 0 && len(resNodes) < params.NodeLimit && len(resEdges) < params.EdgeLimit {
+		curr := queue[0]
+		queue = queue[1:]
+
+		if curr.depth >= params.MaxHops {
+			continue
+		}
+
+		outEdges := make([]*models.Edge, len(e.outgoingEdges[curr.nodeID]))
+		copy(outEdges, e.outgoingEdges[curr.nodeID])
+		sort.Slice(outEdges, func(i, j int) bool { return outEdges[i].ID < outEdges[j].ID })
+
+		for _, edge := range outEdges {
+			if len(resEdges) >= params.EdgeLimit {
+				break
+			}
+			if len(params.EdgeTypes) > 0 && !params.EdgeTypes[edge.Kind] {
+				continue
+			}
+
+			targetNode, tFound := e.nodes[edge.TargetID]
+			if !tFound {
+				continue
+			}
+			if len(params.NodeTypes) > 0 && !params.NodeTypes[targetNode.Kind] {
+				continue
+			}
+
+			if !visitedEdges[edge.ID] {
+				visitedEdges[edge.ID] = true
+				resEdges = append(resEdges, edge)
+			}
+
+			if !visitedNodes[edge.TargetID] && len(resNodes) < params.NodeLimit {
+				visitedNodes[edge.TargetID] = true
+				resNodes = append(resNodes, targetNode)
+				queue = append(queue, queueItem{nodeID: edge.TargetID, depth: curr.depth + 1})
+			}
+		}
+
+		inEdges := make([]*models.Edge, len(e.incomingEdges[curr.nodeID]))
+		copy(inEdges, e.incomingEdges[curr.nodeID])
+		sort.Slice(inEdges, func(i, j int) bool { return inEdges[i].ID < inEdges[j].ID })
+
+		for _, edge := range inEdges {
+			if len(resEdges) >= params.EdgeLimit {
+				break
+			}
+			if len(params.EdgeTypes) > 0 && !params.EdgeTypes[edge.Kind] {
+				continue
+			}
+
+			srcNode, sFound := e.nodes[edge.SourceID]
+			if !sFound {
+				continue
+			}
+			if len(params.NodeTypes) > 0 && !params.NodeTypes[srcNode.Kind] {
+				continue
+			}
+
+			if !visitedEdges[edge.ID] {
+				visitedEdges[edge.ID] = true
+				resEdges = append(resEdges, edge)
+			}
+
+			if !visitedNodes[edge.SourceID] && len(resNodes) < params.NodeLimit {
+				visitedNodes[edge.SourceID] = true
+				resNodes = append(resNodes, srcNode)
+				queue = append(queue, queueItem{nodeID: edge.SourceID, depth: curr.depth + 1})
+			}
+		}
+	}
+
+	sort.Slice(resNodes, func(i, j int) bool { return resNodes[i].ID < resNodes[j].ID })
+	sort.Slice(resEdges, func(i, j int) bool { return resEdges[i].ID < resEdges[j].ID })
+
+	return resNodes, resEdges
+}
+
 // Stats returns node and edge count metrics.
 func (e *Engine) Stats() (nodeCount, edgeCount int) {
 	e.mu.RLock()

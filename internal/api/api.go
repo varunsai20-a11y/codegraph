@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -394,17 +395,114 @@ func (s *Server) handleGetAnalysisSummary(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleGetGraph(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	nodes, edges, err := s.store.GetGraphForRepository(r.Context(), id)
-	if err != nil {
-		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+
+	repo, err := s.store.GetRepository(r.Context(), id)
+	if err != nil || repo == nil {
+		s.respondJSON(w, http.StatusNotFound, map[string]string{"error": "repository not found"})
 		return
 	}
+
+	query := r.URL.Query()
+	scope := strings.ToUpper(query.Get("scope"))
+	if scope == "" {
+		scope = "OVERVIEW"
+	}
+
+	targetNodeID := query.Get("target")
+
+	maxHops := 1
+	if hStr := query.Get("depth"); hStr != "" {
+		if h, err := strconv.Atoi(hStr); err == nil && h > 0 {
+			maxHops = h
+		}
+	}
+	if maxHops > 2 {
+		maxHops = 2
+	}
+
+	nodeLimit := 20
+	if scope == "NEIGHBORHOOD" {
+		nodeLimit = 50
+	}
+	if lStr := query.Get("node_limit"); lStr != "" {
+		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
+			nodeLimit = l
+		}
+	}
+	if nodeLimit > 100 {
+		nodeLimit = 100
+	}
+
+	edgeLimit := 50
+	if scope == "NEIGHBORHOOD" {
+		edgeLimit = 100
+	}
+	if elStr := query.Get("edge_limit"); elStr != "" {
+		if el, err := strconv.Atoi(elStr); err == nil && el > 0 {
+			edgeLimit = el
+		}
+	}
+	if edgeLimit > 200 {
+		edgeLimit = 200
+	}
+
+	nodeTypesMap := make(map[models.NodeKind]bool)
+	if ntStr := query.Get("node_types"); ntStr != "" {
+		for _, part := range strings.Split(ntStr, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				nodeTypesMap[models.NodeKind(part)] = true
+			}
+		}
+	}
+
+	edgeTypesMap := make(map[models.EdgeKind]bool)
+	if etStr := query.Get("edge_types"); etStr != "" {
+		for _, part := range strings.Split(etStr, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				edgeTypesMap[models.EdgeKind(part)] = true
+			}
+		}
+	}
+
+	engine, found := s.getOrLoadEngine(r.Context(), id)
+	if !found {
+		s.respondJSON(w, http.StatusOK, map[string]interface{}{
+			"repository_id": id,
+			"node_count":    0,
+			"edge_count":    0,
+			"nodes":         []*models.Node{},
+			"edges":         []*models.Edge{},
+		})
+		return
+	}
+
+	qParams := graph.QueryParams{
+		StartNodeID: targetNodeID,
+		MaxHops:     maxHops,
+		NodeLimit:   nodeLimit,
+		EdgeLimit:   edgeLimit,
+		NodeTypes:   nodeTypesMap,
+		EdgeTypes:   edgeTypesMap,
+	}
+
+	var nodes []*models.Node
+	var edges []*models.Edge
+
+	if scope == "NEIGHBORHOOD" && targetNodeID != "" {
+		nodes, edges = engine.GetBoundedNeighborhood(qParams)
+	} else {
+		nodes, edges = engine.GetOverviewGraph(qParams)
+	}
+
 	if nodes == nil {
 		nodes = []*models.Node{}
 	}
 	if edges == nil {
 		edges = []*models.Edge{}
 	}
+
 	s.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"repository_id": id,
 		"node_count":    len(nodes),

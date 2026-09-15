@@ -5,8 +5,9 @@ import { Header } from "@/components/layout/Header";
 import { SidebarNav } from "@/components/layout/SidebarNav";
 import { StatusBar } from "@/components/layout/StatusBar";
 import { RepositoryExplorer } from "@/components/explorer/RepositoryExplorer";
+import { GraphExplorer } from "@/components/graph/GraphExplorer";
 import { useAppStore } from "@/store/useAppStore";
-import { AlertTriangle, Network, SplitSquareVertical, GitFork, Bot, Compass } from "lucide-react";
+import { AlertTriangle, SplitSquareVertical, GitFork, Bot, Compass } from "lucide-react";
 
 export default function Home() {
   const { activeTab, fetchRepositories, error } = useAppStore();
@@ -20,15 +21,7 @@ export default function Home() {
       case "EXPLORER":
         return <RepositoryExplorer />;
       case "GRAPH":
-        return (
-          <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none">
-            <Network className="w-10 h-10 text-gray-500 mb-3" />
-            <h3 className="text-sm font-bold text-gray-200">Symbol & Architecture Graph Visualization</h3>
-            <p className="text-xs text-gray-400 max-w-sm mt-1">
-              Interactive React Flow canvas and layout engine will be implemented in Checkpoint 3.
-            </p>
-          </div>
-        );
+        return <GraphExplorer />;
       case "SYNC":
         return (
           <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none">

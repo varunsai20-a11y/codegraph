@@ -191,3 +191,177 @@ func TestConcurrentGraphStress(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestBoundedProgressiveGraphTraversal(t *testing.T) {
+	repoID := "repo-c3-test"
+	engine := NewEngine(repoID)
+
+	repoNodeID := FormatNodeID(models.NodeKindRepository, repoID, "TestRepo")
+	repoNode := &models.Node{ID: repoNodeID, RepositoryID: repoID, Kind: models.NodeKindRepository, Label: "TestRepo"}
+
+	nodes := []*models.Node{repoNode}
+	var edges []*models.Edge
+
+	// Create 30 file nodes and 30 symbol nodes with edges
+	for i := 1; i <= 30; i++ {
+		filePath := fmt.Sprintf("pkg/file_%02d.go", i)
+		fNodeID := FormatNodeID(models.NodeKindFile, repoID, filePath)
+		fNode := &models.Node{ID: fNodeID, RepositoryID: repoID, Kind: models.NodeKindFile, Label: filePath, RelativePath: filePath}
+		nodes = append(nodes, fNode)
+
+		// Repo CONTAINS File edge
+		edges = append(edges, &models.Edge{
+			ID:           FormatEdgeID(repoID, repoNodeID, fNodeID, models.EdgeKindContains, 0),
+			RepositoryID: repoID,
+			SourceID:     repoNodeID,
+			TargetID:     fNodeID,
+			Kind:         models.EdgeKindContains,
+		})
+
+		sID := fmt.Sprintf("sym_%02d", i)
+		sNodeID := FormatNodeID(models.NodeKindSymbol, repoID, sID)
+		sNode := &models.Node{ID: sNodeID, RepositoryID: repoID, Kind: models.NodeKindSymbol, Label: sID, RelativePath: filePath}
+		nodes = append(nodes, sNode)
+
+		// File CONTAINS Symbol edge
+		edges = append(edges, &models.Edge{
+			ID:           FormatEdgeID(repoID, fNodeID, sNodeID, models.EdgeKindContains, i),
+			RepositoryID: repoID,
+			SourceID:     fNodeID,
+			TargetID:     sNodeID,
+			Kind:         models.EdgeKindContains,
+		})
+	}
+
+	engine.LoadGraph(nodes, edges)
+
+	// 1. NodeLimit and EdgeLimit Enforcement in Overview
+	overviewNodes, overviewEdges := engine.GetOverviewGraph(QueryParams{
+		NodeLimit: 15,
+		EdgeLimit: 10,
+	})
+	if len(overviewNodes) > 15 {
+		t.Errorf("NodeLimit violated in Overview: got %d > 15", len(overviewNodes))
+	}
+	if len(overviewEdges) > 10 {
+		t.Errorf("EdgeLimit violated in Overview: got %d > 10", len(overviewEdges))
+	}
+
+	// 2. Deterministic Ordering Invariant
+	nodesRun1, edgesRun1 := engine.GetOverviewGraph(QueryParams{NodeLimit: 20, EdgeLimit: 20})
+	nodesRun2, edgesRun2 := engine.GetOverviewGraph(QueryParams{NodeLimit: 20, EdgeLimit: 20})
+
+	if len(nodesRun1) != len(nodesRun2) || len(edgesRun1) != len(edgesRun2) {
+		t.Fatalf("Deterministic output error: count mismatch between runs")
+	}
+	for i := range nodesRun1 {
+		if nodesRun1[i].ID != nodesRun2[i].ID {
+			t.Errorf("Deterministic node ordering error at index %d: %s != %s", i, nodesRun1[i].ID, nodesRun2[i].ID)
+		}
+	}
+	for i := range edgesRun1 {
+		if edgesRun1[i].ID != edgesRun2[i].ID {
+			t.Errorf("Deterministic edge ordering error at index %d: %s != %s", i, edgesRun1[i].ID, edgesRun2[i].ID)
+		}
+	}
+
+	// 3. Node Type Filtering
+	targetFileID := FormatNodeID(models.NodeKindFile, repoID, "pkg/file_01.go")
+	fileOnlyNodes, _ := engine.GetBoundedNeighborhood(QueryParams{
+		StartNodeID: targetFileID,
+		MaxHops:     1,
+		NodeLimit:   50,
+		EdgeLimit:   50,
+		NodeTypes:   map[models.NodeKind]bool{models.NodeKindFile: true},
+	})
+	for _, n := range fileOnlyNodes {
+		if n.Kind != models.NodeKindFile {
+			t.Errorf("Node type filter failed: expected NODE_FILE, got %s", n.Kind)
+		}
+	}
+
+	// 4. Edge Type Filtering
+	targetFileID = FormatNodeID(models.NodeKindFile, repoID, "pkg/file_01.go")
+	containsOnlyNodes, containsOnlyEdges := engine.GetBoundedNeighborhood(QueryParams{
+		StartNodeID: targetFileID,
+		MaxHops:     1,
+		NodeLimit:   50,
+		EdgeLimit:   50,
+		EdgeTypes:   map[models.EdgeKind]bool{models.EdgeKindContains: true},
+	})
+	if len(containsOnlyNodes) == 0 {
+		t.Errorf("Expected neighborhood nodes for file_01.go")
+	}
+	for _, ed := range containsOnlyEdges {
+		if ed.Kind != models.EdgeKindContains {
+			t.Errorf("Edge type filter failed: expected EDGE_CONTAINS, got %s", ed.Kind)
+		}
+	}
+
+	// 5. Invalid/Missing Target Handling
+	missingNodes, missingEdges := engine.GetBoundedNeighborhood(QueryParams{
+		StartNodeID: "nonexistent-node-id",
+		MaxHops:     1,
+	})
+	if len(missingNodes) != 0 || len(missingEdges) != 0 {
+		t.Errorf("Missing target error: expected 0 nodes/edges, got %d nodes %d edges", len(missingNodes), len(missingEdges))
+	}
+
+	// 6. Duplicate Elimination & Depth Enforcement
+	deepNodes, deepEdges := engine.GetBoundedNeighborhood(QueryParams{
+		StartNodeID: targetFileID,
+		MaxHops:     1,
+		NodeLimit:   50,
+		EdgeLimit:   50,
+	})
+	seenNodeIDs := make(map[string]bool)
+	for _, n := range deepNodes {
+		if seenNodeIDs[n.ID] {
+			t.Errorf("Duplicate node detected in traversal output: %s", n.ID)
+		}
+		seenNodeIDs[n.ID] = true
+	}
+	seenEdgeIDs := make(map[string]bool)
+	for _, e := range deepEdges {
+		if seenEdgeIDs[e.ID] {
+			t.Errorf("Duplicate edge detected in traversal output: %s", e.ID)
+		}
+		seenEdgeIDs[e.ID] = true
+	}
+}
+
+func TestRepositoryIsolationInGraphEngine(t *testing.T) {
+	repoA := "repo-A"
+	repoB := "repo-B"
+
+	engineA := NewEngine(repoA)
+	engineB := NewEngine(repoB)
+
+	nodeA := &models.Node{ID: FormatNodeID(models.NodeKindRepository, repoA, "RepoA"), RepositoryID: repoA, Kind: models.NodeKindRepository, Label: "RepoA"}
+	nodeB := &models.Node{ID: FormatNodeID(models.NodeKindRepository, repoB, "RepoB"), RepositoryID: repoB, Kind: models.NodeKindRepository, Label: "RepoB"}
+
+	fileA := &models.Node{ID: FormatNodeID(models.NodeKindFile, repoA, "src/a.go"), RepositoryID: repoA, Kind: models.NodeKindFile, Label: "src/a.go", RelativePath: "src/a.go"}
+	fileB := &models.Node{ID: FormatNodeID(models.NodeKindFile, repoB, "src/b.go"), RepositoryID: repoB, Kind: models.NodeKindFile, Label: "src/b.go", RelativePath: "src/b.go"}
+
+	engineA.LoadGraph([]*models.Node{nodeA, fileA}, []*models.Edge{
+		{ID: "edge-A", RepositoryID: repoA, SourceID: nodeA.ID, TargetID: fileA.ID, Kind: models.EdgeKindContains},
+	})
+	engineB.LoadGraph([]*models.Node{nodeB, fileB}, []*models.Edge{
+		{ID: "edge-B", RepositoryID: repoB, SourceID: nodeB.ID, TargetID: fileB.ID, Kind: models.EdgeKindContains},
+	})
+
+	nodesA, _ := engineA.GetOverviewGraph(QueryParams{NodeLimit: 10})
+	nodesB, _ := engineB.GetOverviewGraph(QueryParams{NodeLimit: 10})
+
+	for _, n := range nodesA {
+		if n.RepositoryID != repoA {
+			t.Errorf("Repository isolation error: engine A returned node from repository %s", n.RepositoryID)
+		}
+	}
+
+	for _, n := range nodesB {
+		if n.RepositoryID != repoB {
+			t.Errorf("Repository isolation error: engine B returned node from repository %s", n.RepositoryID)
+		}
+	}
+}

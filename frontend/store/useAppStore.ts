@@ -1,11 +1,19 @@
 import { create } from "zustand";
-import { Repository, FileManifestItem, FileContentResponse } from "@/lib/types";
+import {
+  Repository,
+  FileManifestItem,
+  FileContentResponse,
+  GraphNode,
+  GraphEdge,
+  GraphQueryParams,
+} from "@/lib/types";
 import { apiClient } from "@/lib/api-client";
 
 export type NavigationTab = "EXPLORER" | "GRAPH" | "SYNC" | "FLOW" | "AI" | "GUIDE";
 
 let manifestAbortController: AbortController | null = null;
 let sourceAbortController: AbortController | null = null;
+let graphAbortController: AbortController | null = null;
 
 interface AppState {
   repositories: Repository[];
@@ -21,6 +29,17 @@ interface AppState {
   selectedNodeID: string | null;
   highlightLineRange: [number, number] | null;
 
+  // Graph C3 State
+  graphNodes: GraphNode[];
+  graphEdges: GraphEdge[];
+  graphScope: "OVERVIEW" | "NEIGHBORHOOD";
+  graphNodeTypesFilter: Set<string>;
+  graphEdgeTypesFilter: Set<string>;
+  graphNodeLimit: number;
+  expandedNodeIDs: Set<string>;
+  isLoadingGraph: boolean;
+  graphError: string | null;
+
   isLoadingRepos: boolean;
   isLoadingManifest: boolean;
   isLoadingSource: boolean;
@@ -34,6 +53,13 @@ interface AppState {
   selectRepository: (id: string) => Promise<void>;
   fetchFileManifest: (repoID: string) => Promise<void>;
   fetchSourceFile: (repoID: string, relativePath: string) => Promise<void>;
+  fetchGraph: (repoID: string, params?: GraphQueryParams) => Promise<void>;
+  expandGraphNode: (repoID: string, nodeID: string) => Promise<void>;
+  setGraphScope: (scope: "OVERVIEW" | "NEIGHBORHOOD") => void;
+  setGraphNodeTypesFilter: (types: Set<string>) => void;
+  setGraphEdgeTypesFilter: (types: Set<string>) => void;
+  setGraphNodeLimit: (limit: number) => void;
+  resetGraph: (repoID: string) => Promise<void>;
   toggleExpandPath: (path: string) => void;
   setExpandedPaths: (paths: Set<string>) => void;
   setSearchQuery: (query: string) => void;
@@ -58,6 +84,29 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedSymbolID: null,
   selectedNodeID: null,
   highlightLineRange: null,
+
+  // Graph C3 State defaults
+  graphNodes: [],
+  graphEdges: [],
+  graphScope: "OVERVIEW",
+  graphNodeTypesFilter: new Set<string>([
+    "NODE_REPOSITORY",
+    "NODE_FILE",
+    "NODE_SYMBOL",
+    "NODE_EXTERNAL_MODULE",
+  ]),
+  graphEdgeTypesFilter: new Set<string>([
+    "EDGE_CONTAINS",
+    "EDGE_IMPORTS",
+    "EDGE_EXPORTS",
+    "EDGE_CALLS",
+    "EDGE_EXTENDS",
+    "EDGE_IMPLEMENTS",
+  ]),
+  graphNodeLimit: 20,
+  expandedNodeIDs: new Set<string>(),
+  isLoadingGraph: false,
+  graphError: null,
 
   isLoadingRepos: false,
   isLoadingManifest: false,
@@ -87,8 +136,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       if (active) {
         get().fetchFileManifest(active.id);
+        get().fetchGraph(active.id, { scope: "OVERVIEW", node_limit: 20 });
       } else {
-        set({ fileManifest: [], selectedPath: null, sourceContent: null });
+        set({ fileManifest: [], selectedPath: null, sourceContent: null, graphNodes: [], graphEdges: [] });
       }
     } catch (err: any) {
       set({
@@ -107,6 +157,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       sourceAbortController.abort();
       sourceAbortController = null;
     }
+    if (graphAbortController) {
+      graphAbortController.abort();
+      graphAbortController = null;
+    }
 
     const repos = get().repositories;
     const active = repos.find((r) => r.id === id) || null;
@@ -122,12 +176,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedSymbolID: null,
       selectedNodeID: null,
       highlightLineRange: null,
+      graphNodes: [],
+      graphEdges: [],
+      graphScope: "OVERVIEW",
+      expandedNodeIDs: new Set<string>(),
       manifestError: null,
       sourceError: null,
+      graphError: null,
     });
 
     if (active) {
-      await get().fetchFileManifest(id);
+      await Promise.all([
+        get().fetchFileManifest(id),
+        get().fetchGraph(id, { scope: "OVERVIEW", node_limit: 20 }),
+      ]);
     }
   },
 
@@ -232,6 +294,106 @@ export const useAppStore = create<AppState>((set, get) => ({
         });
       }
     }
+  },
+
+  fetchGraph: async (repoID: string, params?: GraphQueryParams) => {
+    if (get().activeRepoID !== repoID) {
+      return;
+    }
+
+    if (graphAbortController) {
+      graphAbortController.abort();
+    }
+    graphAbortController = new AbortController();
+    const signal = graphAbortController.signal;
+
+    set({ isLoadingGraph: true, graphError: null });
+
+    try {
+      const res = await apiClient.getGraph(repoID, params, signal);
+      if (get().activeRepoID !== repoID) {
+        return;
+      }
+
+      set({
+        graphNodes: res.nodes,
+        graphEdges: res.edges,
+        graphScope: params?.scope || "OVERVIEW",
+        isLoadingGraph: false,
+      });
+    } catch (err: any) {
+      if (err.message === "Request cancelled" || signal.aborted) {
+        return;
+      }
+      if (get().activeRepoID === repoID) {
+        set({
+          isLoadingGraph: false,
+          graphError: err.message || "Failed to load repository graph",
+        });
+      }
+    }
+  },
+
+  expandGraphNode: async (repoID: string, nodeID: string) => {
+    if (get().activeRepoID !== repoID) return;
+
+    if (graphAbortController) {
+      graphAbortController.abort();
+    }
+    graphAbortController = new AbortController();
+    const signal = graphAbortController.signal;
+
+    set({ isLoadingGraph: true, graphError: null });
+
+    try {
+      const res = await apiClient.getGraph(
+        repoID,
+        {
+          scope: "NEIGHBORHOOD",
+          target: nodeID,
+          depth: 1,
+          node_limit: 50,
+          edge_limit: 100,
+        },
+        signal
+      );
+
+      if (get().activeRepoID !== repoID) return;
+
+      const nextExpanded = new Set<string>();
+      nextExpanded.add(nodeID);
+
+      set({
+        graphNodes: res.nodes,
+        graphEdges: res.edges,
+        graphScope: "NEIGHBORHOOD",
+        expandedNodeIDs: nextExpanded,
+        selectedNodeID: nodeID,
+        isLoadingGraph: false,
+      });
+    } catch (err: any) {
+      if (err.message === "Request cancelled" || signal.aborted) return;
+      if (get().activeRepoID === repoID) {
+        set({
+          isLoadingGraph: false,
+          graphError: err.message || "Failed to expand node neighborhood",
+        });
+      }
+    }
+  },
+
+  setGraphScope: (scope) => set({ graphScope: scope }),
+  setGraphNodeTypesFilter: (types) => set({ graphNodeTypesFilter: new Set(types) }),
+  setGraphEdgeTypesFilter: (types) => set({ graphEdgeTypesFilter: new Set(types) }),
+  setGraphNodeLimit: (limit) => set({ graphNodeLimit: limit }),
+
+  resetGraph: async (repoID: string) => {
+    set({
+      graphScope: "OVERVIEW",
+      selectedNodeID: null,
+      expandedNodeIDs: new Set<string>(),
+    });
+    await get().fetchGraph(repoID, { scope: "OVERVIEW", node_limit: 20 });
   },
 
   toggleExpandPath: (path: string) => {

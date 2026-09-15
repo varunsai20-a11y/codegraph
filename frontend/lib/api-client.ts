@@ -1,4 +1,11 @@
-import { Repository, FileManifestItem, FileContentResponse, APIError } from "./types";
+import {
+  Repository,
+  FileManifestItem,
+  FileContentResponse,
+  GraphResponse,
+  GraphQueryParams,
+  APIError,
+} from "./types";
 
 export class CodeGraphAPIClient {
   private baseURL: string;
@@ -93,7 +100,25 @@ export class CodeGraphAPIClient {
   ): Promise<FileContentResponse> {
     return this.getFileContent(id, relativePath, signal);
   }
+
+  async getGraph(
+    id: string,
+    params?: GraphQueryParams,
+    signal?: AbortSignal
+  ): Promise<GraphResponse> {
+    const query = new URLSearchParams();
+    if (params?.scope) query.set("scope", params.scope);
+    if (params?.target) query.set("target", params.target);
+    if (params?.depth) query.set("depth", params.depth.toString());
+    if (params?.node_limit) query.set("node_limit", params.node_limit.toString());
+    if (params?.edge_limit) query.set("edge_limit", params.edge_limit.toString());
+    if (params?.node_types) query.set("node_types", params.node_types);
+    if (params?.edge_types) query.set("edge_types", params.edge_types);
+
+    const queryString = query.toString();
+    const endpoint = `/api/repositories/${id}/graph${queryString ? `?${queryString}` : ""}`;
+    return this.request<GraphResponse>(endpoint, { signal });
+  }
 }
 
 export const apiClient = new CodeGraphAPIClient();
-

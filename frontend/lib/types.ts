@@ -62,3 +62,59 @@ export interface TreeNode {
   fileItem?: FileManifestItem;
 }
 
+export type NodeKind =
+  | "NODE_REPOSITORY"
+  | "NODE_FILE"
+  | "NODE_SYMBOL"
+  | "NODE_EXTERNAL_MODULE";
+
+export type EdgeKind =
+  | "EDGE_CONTAINS"
+  | "EDGE_IMPORTS"
+  | "EDGE_EXPORTS"
+  | "EDGE_CALLS"
+  | "EDGE_EXTENDS"
+  | "EDGE_IMPLEMENTS";
+
+export interface GraphNode {
+  id: string;
+  repository_id: string;
+  kind: NodeKind;
+  label: string;
+  qualified_name: string;
+  file_id?: string;
+  relative_path?: string;
+  location?: SourceLocation;
+  updated_at: string;
+}
+
+export interface GraphEdge {
+  id: string;
+  repository_id: string;
+  source_id: string;
+  target_id: string;
+  target_kind?: string;
+  kind: EdgeKind;
+  status?: string;
+  file_id?: string;
+  location?: SourceLocation;
+  updated_at: string;
+}
+
+export interface GraphResponse {
+  repository_id: string;
+  node_count: number;
+  edge_count: number;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface GraphQueryParams {
+  scope?: "OVERVIEW" | "NEIGHBORHOOD";
+  target?: string;
+  depth?: number;
+  node_limit?: number;
+  edge_limit?: number;
+  node_types?: string;
+  edge_types?: string;
+}
