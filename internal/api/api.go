@@ -12,6 +12,7 @@ import (
 
 	"codegraph/internal/config"
 	"codegraph/internal/graph"
+	"codegraph/internal/guide"
 	"codegraph/internal/ingestion"
 	"codegraph/internal/llm"
 	"codegraph/internal/models"
@@ -31,11 +32,16 @@ type Server struct {
 	wsMgr              *repository.WorkspaceManager
 	indexer            *ingestion.Indexer
 	explanationService llm.ExplanationService
+	guideOrchestrator  guide.GuideOrchestrator
 	router             chi.Router
 }
 
 func (s *Server) SetExplanationService(svc llm.ExplanationService) {
 	s.explanationService = svc
+}
+
+func (s *Server) SetGuideOrchestrator(orch guide.GuideOrchestrator) {
+	s.guideOrchestrator = orch
 }
 
 func NewServer(cfg *config.Config, store storage.Storage, wsMgr *repository.WorkspaceManager, indexer *ingestion.Indexer) *Server {
@@ -119,6 +125,7 @@ func (s *Server) routes() {
 		r.Get("/repositories/{id}/graph/hierarchy", s.handleGetGraphHierarchy)
 		r.Get("/repositories/{id}/flow", s.handleGetFlow)
 		r.Post("/repositories/{id}/explain", s.handleExplainRepository)
+		r.Post("/repositories/{id}/guide", s.handleGetGuide)
 		r.Get("/index-jobs/{id}", s.handleGetIndexJob)
 	})
 }
@@ -791,4 +798,79 @@ func (s *Server) handleExplainRepository(w http.ResponseWriter, r *http.Request)
 	}
 
 	s.respondJSON(w, http.StatusOK, resp)
+}
+
+type GuideRequestBody struct {
+	Action             string                       `json:"action,omitempty"`
+	MaxSteps           int                          `json:"max_steps,omitempty"`
+	CompletedStepIDs   []string                     `json:"completed_step_ids,omitempty"`
+	CurrentStepIndex   int                          `json:"current_step_index,omitempty"`
+	StepType           models.InvestigationStepType `json:"step_type,omitempty"`
+	TargetFileID       string                       `json:"target_file_id,omitempty"`
+	TargetSymbolID     string                       `json:"target_symbol_id,omitempty"`
+	RootSymbolID       string                       `json:"root_symbol_id,omitempty"`
+	TargetNodeID       string                       `json:"target_node_id,omitempty"`
+	InvestigationState *models.Investigation        `json:"investigation_state,omitempty"`
+}
+
+func (s *Server) handleGetGuide(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	repo, err := s.store.GetRepository(r.Context(), id)
+	if err != nil || repo == nil {
+		s.respondJSON(w, http.StatusNotFound, map[string]string{"error": "repository not found"})
+		return
+	}
+
+	var body GuideRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err.Error() != "EOF" {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+		return
+	}
+
+	if body.InvestigationState != nil && body.InvestigationState.RepositoryID != "" && body.InvestigationState.RepositoryID != id {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "repository scope mismatch in investigation state"})
+		return
+	}
+
+	scope, err := models.NewRepositoryScope(id)
+	if err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	req, err := models.NewInvestigationRequest(scope, body.Action)
+	if err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if body.MaxSteps > 0 {
+		req.MaxSteps = body.MaxSteps
+	}
+	if body.CompletedStepIDs != nil {
+		req.CompletedStepIDs = body.CompletedStepIDs
+	}
+	req.CurrentStepIndex = body.CurrentStepIndex
+	req.StepType = body.StepType
+	req.TargetFileID = body.TargetFileID
+	req.TargetSymbolID = body.TargetSymbolID
+	req.RootSymbolID = body.RootSymbolID
+	req.TargetNodeID = body.TargetNodeID
+
+	orch := s.guideOrchestrator
+	if orch == nil {
+		engine, _ := s.getOrLoadEngine(r.Context(), id)
+		summaryGen := guide.NewDefaultArchitectureSummaryGenerator(s.store, engine)
+		composer := retrieval.NewDefaultEvidenceComposer(nil, nil, s.store)
+		expSvc := llm.NewGroundedExplanationService(nil, nil, composer, nil)
+		orch = guide.NewDefaultGuideOrchestrator(s.store, summaryGen, composer, expSvc)
+	}
+
+	inv, err := orch.Guide(r.Context(), req)
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.respondJSON(w, http.StatusOK, inv)
 }

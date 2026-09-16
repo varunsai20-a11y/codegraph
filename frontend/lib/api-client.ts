@@ -7,6 +7,8 @@ import {
   StaticFlowResult,
   FlowQueryParams,
   APIError,
+  Investigation,
+  InvestigationRequest,
 } from "./types";
 
 export class CodeGraphAPIClient {
@@ -154,6 +156,18 @@ export class CodeGraphAPIClient {
     return this.request<any>(`/api/repositories/${id}/explain`, {
       method: "POST",
       body: JSON.stringify(payload),
+      signal,
+    });
+  }
+
+  async getGuide(
+    id: string,
+    payload?: InvestigationRequest,
+    signal?: AbortSignal
+  ): Promise<Investigation> {
+    return this.request<Investigation>(`/api/repositories/${id}/guide`, {
+      method: "POST",
+      body: JSON.stringify(payload || { requested_action: "INITIALIZE" }),
       signal,
     });
   }

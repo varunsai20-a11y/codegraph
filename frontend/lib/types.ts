@@ -242,3 +242,71 @@ export interface ExplanationResponse {
   is_insufficient_evidence: boolean;
   error_message?: string;
 }
+
+export interface ModuleSummary {
+  name: string;
+  file_count: number;
+  symbol_count: number;
+}
+
+export interface ArchitectureSummary {
+  repository_id: string;
+  overview: string;
+  total_files: number;
+  total_symbols: number;
+  total_edges: number;
+  major_modules: ModuleSummary[];
+  important_files: string[];
+  entry_point_candidates: string[];
+  high_connectivity_symbols: string[];
+  external_boundaries: string[];
+}
+
+export interface EvidenceItem {
+  id: string;
+  label: string;
+  kind: string;
+  summary: string;
+  provenance: string;
+}
+
+export interface EvidencePackage {
+  items: EvidenceItem[];
+}
+
+export interface InvestigationStep {
+  id: string;
+  sequence: number;
+  step_type: string;
+  title: string;
+  description: string;
+  target_file?: string;
+  target_symbol?: string;
+  target_node?: string;
+  evidence?: EvidencePackage;
+  explanation?: ExplanationResponse;
+  suggested_questions?: string[];
+  status: "STEP_PENDING" | "STEP_ACTIVE" | "STEP_COMPLETED";
+}
+
+export interface Investigation {
+  id: string;
+  repository_id: string;
+  status: string;
+  architecture_summary: ArchitectureSummary;
+  steps: InvestigationStep[];
+  current_step_index: number;
+  current_step?: InvestigationStep;
+  completed_step_ids: string[];
+  is_complete: boolean;
+  suggested_questions?: string[];
+}
+
+export interface InvestigationRequest {
+  current_context?: string;
+  selected_node?: string;
+  selected_file?: string;
+  selected_symbol?: string;
+  investigation_state?: Investigation;
+  requested_action?: string;
+}

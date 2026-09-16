@@ -9,6 +9,9 @@ import {
   StaticFlowResult,
   FlowQueryParams,
   ExplanationResponse,
+  Investigation,
+  InvestigationStep,
+  InvestigationRequest,
 } from "@/lib/types";
 import { apiClient } from "@/lib/api-client";
 
@@ -19,6 +22,7 @@ let sourceAbortController: AbortController | null = null;
 let graphAbortController: AbortController | null = null;
 let flowAbortController: AbortController | null = null;
 let explainAbortController: AbortController | null = null;
+let guideAbortController: AbortController | null = null;
 
 interface AppState {
   repositories: Repository[];
@@ -114,6 +118,16 @@ interface AppState {
   clearExplanation: () => void;
   selectFileAndHighlight: (relativePath: string, line: number) => void;
 
+  // C7 Guided Reverse Engineering State
+  investigation: Investigation | null;
+  isGuiding: boolean;
+  guideError: string | null;
+
+  // C7 Guided Actions
+  fetchGuide: (action?: string) => Promise<void>;
+  selectGuideStep: (index: number) => void;
+  syncWorkspaceToGuideStep: (step: InvestigationStep) => void;
+
   setSelectedPath: (path: string | null) => void;
   setSelectedSymbolID: (id: string | null) => void;
   setSelectedNodeID: (id: string | null) => void;
@@ -175,6 +189,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   explanationResult: null,
   isExplaining: false,
   explanationError: null,
+
+  // C7 Guided Reverse Engineering Defaults
+  investigation: null,
+  isGuiding: false,
+  guideError: null,
 
   error: null,
   manifestError: null,
@@ -715,6 +734,67 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (repoID) {
       get().fetchSourceFile(repoID, relativePath);
     }
+  },
+
+  fetchGuide: async (action?: string) => {
+    const repoID = get().activeRepoID;
+    if (!repoID) return;
+
+    if (guideAbortController) {
+      guideAbortController.abort();
+    }
+    guideAbortController = new AbortController();
+
+    set({ isGuiding: true, guideError: null });
+
+    try {
+      const inv = await apiClient.getGuide(
+        repoID,
+        {
+          current_context: get().activeTab,
+          selected_node: get().selectedNodeID || undefined,
+          selected_file: get().selectedPath || undefined,
+          selected_symbol: get().selectedSymbolID || undefined,
+          investigation_state: get().investigation || undefined,
+          requested_action: action,
+        },
+        guideAbortController.signal
+      );
+      set({ investigation: inv, isGuiding: false });
+
+      if (inv && inv.current_step) {
+        get().syncWorkspaceToGuideStep(inv.current_step);
+      }
+    } catch (err: any) {
+      if (err.message === "Request cancelled") return;
+      set({ guideError: err.message || "Failed to fetch guide", isGuiding: false });
+    }
+  },
+
+  syncWorkspaceToGuideStep: (step: InvestigationStep) => {
+    if (step.target_file) {
+      set({ selectedPath: step.target_file });
+      get().autoExpandParentPaths(step.target_file);
+      const repoID = get().activeRepoID;
+      if (repoID) {
+        get().fetchSourceFile(repoID, step.target_file);
+      }
+    }
+    if (step.target_symbol) {
+      set({ selectedSymbolID: step.target_symbol });
+    }
+    if (step.target_node) {
+      set({ selectedNodeID: step.target_node });
+    }
+  },
+
+  selectGuideStep: (index: number) => {
+    const inv = get().investigation;
+    if (!inv || !inv.steps || index < 0 || index >= inv.steps.length) return;
+    const step = inv.steps[index];
+    const updated = { ...inv, current_step: step };
+    set({ investigation: updated });
+    get().syncWorkspaceToGuideStep(step);
   },
 
   setSearchQuery: (query: string) => set({ searchQuery: query }),
