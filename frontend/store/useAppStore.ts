@@ -8,6 +8,7 @@ import {
   GraphQueryParams,
   StaticFlowResult,
   FlowQueryParams,
+  ExplanationResponse,
 } from "@/lib/types";
 import { apiClient } from "@/lib/api-client";
 
@@ -17,6 +18,7 @@ let manifestAbortController: AbortController | null = null;
 let sourceAbortController: AbortController | null = null;
 let graphAbortController: AbortController | null = null;
 let flowAbortController: AbortController | null = null;
+let explainAbortController: AbortController | null = null;
 
 interface AppState {
   repositories: Repository[];
@@ -99,6 +101,19 @@ interface AppState {
   navigateToSourceFromGraph: (nodeID: string, targetTab?: NavigationTab) => void;
   navigateToGraphFromSource: () => void;
 
+  // C6 AI State
+  explanationResult: ExplanationResponse | null;
+  isExplaining: boolean;
+  explanationError: string | null;
+
+  // C6 AI Actions
+  fetchExplanation: (
+    query: string,
+    opts?: { symbolId?: string; rootSymbol?: string; targetNode?: string; flow?: boolean }
+  ) => Promise<void>;
+  clearExplanation: () => void;
+  selectFileAndHighlight: (relativePath: string, line: number) => void;
+
   setSelectedPath: (path: string | null) => void;
   setSelectedSymbolID: (id: string | null) => void;
   setSelectedNodeID: (id: string | null) => void;
@@ -155,6 +170,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedFlowStepIndex: null,
   isLoadingFlow: false,
   flowError: null,
+
+  // C6 AI Defaults
+  explanationResult: null,
+  isExplaining: false,
+  explanationError: null,
 
   error: null,
   manifestError: null,
@@ -653,6 +673,47 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     if (repoID) {
       get().fetchStaticFlow(repoID, symbolID);
+    }
+  },
+
+  fetchExplanation: async (query: string, opts) => {
+    const repoID = get().activeRepoID;
+    if (!repoID) return;
+
+    if (explainAbortController) {
+      explainAbortController.abort();
+    }
+    explainAbortController = new AbortController();
+
+    set({ isExplaining: true, explanationError: null });
+
+    try {
+      const res = await apiClient.explainCode(
+        repoID,
+        {
+          query,
+          symbol_id: opts?.symbolId,
+          root_symbol: opts?.rootSymbol,
+          target_node: opts?.targetNode,
+          flow: opts?.flow,
+        },
+        explainAbortController.signal
+      );
+      set({ explanationResult: res, isExplaining: false });
+    } catch (err: any) {
+      if (err.message === "Request cancelled") return;
+      set({ explanationError: err.message || "Failed to generate explanation", isExplaining: false });
+    }
+  },
+
+  clearExplanation: () => set({ explanationResult: null, explanationError: null }),
+
+  selectFileAndHighlight: (relativePath: string, line: number) => {
+    const repoID = get().activeRepoID;
+    set({ selectedPath: relativePath, highlightLineRange: [line, line] });
+    get().autoExpandParentPaths(relativePath);
+    if (repoID) {
+      get().fetchSourceFile(repoID, relativePath);
     }
   },
 

@@ -61,7 +61,7 @@ func createTestPackage(t *testing.T, repoID string) (*models.EvidencePackage, mo
 func TestExplanationService_MockProvider(t *testing.T) {
 	pkg, scope := createTestPackage(t, "repo-test-a")
 	mock := llm.NewMockLLMProvider("Login is handled in AuthHandler. [E1]", nil)
-	svc := llm.NewGroundedExplanationService(mock, nil)
+	svc := llm.NewGroundedExplanationService(mock, nil, nil, nil)
 
 	res, err := svc.Explain(context.Background(), scope, pkg)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestExplanationService_ProviderAbstractionInteroperability(t *testing.T) {
 	mock := llm.NewMockLLMProvider("UserDB is defined in db/user.go [E2]", nil)
 
 	var provider llm.LLMProvider = mock
-	svc := llm.NewGroundedExplanationService(provider, nil)
+	svc := llm.NewGroundedExplanationService(provider, nil, nil, nil)
 
 	res, err := svc.Explain(context.Background(), scope, pkg)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestExplanationService_ProviderAbstractionInteroperability(t *testing.T) {
 func TestExplanationService_ValidCitations(t *testing.T) {
 	pkg, scope := createTestPackage(t, "repo-valid-cite")
 	mock := llm.NewMockLLMProvider("Login logic is in AuthHandler [E1] using UserDB [E2].", nil)
-	svc := llm.NewGroundedExplanationService(mock, nil)
+	svc := llm.NewGroundedExplanationService(mock, nil, nil, nil)
 
 	res, err := svc.Explain(context.Background(), scope, pkg)
 	if err != nil {
@@ -136,7 +136,7 @@ func TestExplanationService_InvalidCitations(t *testing.T) {
 	pkg, scope := createTestPackage(t, "repo-invalid-cite")
 	// [E99] does not exist in pkg (which has E1 and E2)
 	mock := llm.NewMockLLMProvider("Login logic is in AuthHandler [E1] and PaymentHandler [E99].", nil)
-	svc := llm.NewGroundedExplanationService(mock, nil)
+	svc := llm.NewGroundedExplanationService(mock, nil, nil, nil)
 
 	res, err := svc.Explain(context.Background(), scope, pkg)
 	if err != nil {
@@ -157,7 +157,7 @@ func TestExplanationService_InvalidCitations(t *testing.T) {
 func TestExplanationService_MalformedCitations(t *testing.T) {
 	pkg, scope := createTestPackage(t, "repo-malformed-cite")
 	mock := llm.NewMockLLMProvider("See references [E-1], [Evidence1], and [E999999].", nil)
-	svc := llm.NewGroundedExplanationService(mock, nil)
+	svc := llm.NewGroundedExplanationService(mock, nil, nil, nil)
 
 	res, err := svc.Explain(context.Background(), scope, pkg)
 	if err != nil {
@@ -176,7 +176,7 @@ func TestExplanationService_MultipleAndDuplicateCitations(t *testing.T) {
 	pkg, scope := createTestPackage(t, "repo-dup-cite")
 	// [E1] appears twice
 	mock := llm.NewMockLLMProvider("First check [E1]. Then verify [E2]. Finally re-check [E1].", nil)
-	svc := llm.NewGroundedExplanationService(mock, nil)
+	svc := llm.NewGroundedExplanationService(mock, nil, nil, nil)
 
 	res, err := svc.Explain(context.Background(), scope, pkg)
 	if err != nil {
@@ -214,7 +214,7 @@ func TestExplanationService_PromptInjectionDefense(t *testing.T) {
 	pkg.Sufficiency = models.EvidenceSufficiencyResult{Status: models.SufficiencySufficient}
 
 	mock := llm.NewMockLLMProvider("Grounded response [E1].", nil)
-	svc := llm.NewGroundedExplanationService(mock, nil)
+	svc := llm.NewGroundedExplanationService(mock, nil, nil, nil)
 
 	_, err := svc.Explain(context.Background(), scope, pkg)
 	if err != nil {
@@ -245,7 +245,7 @@ func TestExplanationService_InsufficientEvidence(t *testing.T) {
 	}
 
 	mock := llm.NewMockLLMProvider("Fabricated answer.", nil)
-	svc := llm.NewGroundedExplanationService(mock, nil)
+	svc := llm.NewGroundedExplanationService(mock, nil, nil, nil)
 
 	res, err := svc.Explain(context.Background(), scope, pkg)
 	if err != nil {
@@ -264,7 +264,7 @@ func TestExplanationService_InsufficientEvidence(t *testing.T) {
 func TestExplanationService_ProviderFailure(t *testing.T) {
 	pkg, scope := createTestPackage(t, "repo-fail")
 	mock := llm.NewMockLLMProvider("", errors.New("upstream service connection refused"))
-	svc := llm.NewGroundedExplanationService(mock, nil)
+	svc := llm.NewGroundedExplanationService(mock, nil, nil, nil)
 
 	_, err := svc.Explain(context.Background(), scope, pkg)
 	if err == nil {
@@ -279,7 +279,7 @@ func TestExplanationService_ProviderFailure(t *testing.T) {
 func TestExplanationService_ContextCancellation(t *testing.T) {
 	pkg, scope := createTestPackage(t, "repo-cancel")
 	mock := llm.NewMockLLMProvider("Answer", nil)
-	svc := llm.NewGroundedExplanationService(mock, nil)
+	svc := llm.NewGroundedExplanationService(mock, nil, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel context immediately
@@ -295,7 +295,7 @@ func TestExplanationService_RepositoryIsolation(t *testing.T) {
 	scopeB, _ := models.NewRepositoryScope("repo-B") // Mismatched scope
 
 	mock := llm.NewMockLLMProvider("Answer", nil)
-	svc := llm.NewGroundedExplanationService(mock, nil)
+	svc := llm.NewGroundedExplanationService(mock, nil, nil, nil)
 
 	_, err := svc.Explain(context.Background(), scopeB, pkgA)
 	if err == nil {

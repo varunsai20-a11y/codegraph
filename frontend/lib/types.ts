@@ -173,3 +173,72 @@ export interface FlowQueryParams {
   max_nodes?: number;
   max_paths?: number;
 }
+
+export interface EvidenceReference {
+  label: string;
+  stable_id: string;
+}
+
+export interface ExplanationClaim {
+  id: string;
+  text: string;
+  evidence_references?: EvidenceReference[];
+  grounding_status: string;
+  is_valid: boolean;
+  reason?: string;
+}
+
+export interface ExplanationEvidence {
+  id: string;
+  stable_id: string;
+  label: string;
+  repository_id: string;
+  type: string;
+  file_id?: string;
+  relative_path: string;
+  location: SourceLocation;
+  symbol_id?: string;
+  symbol_name?: string;
+  content: string;
+  retriever_type: string;
+}
+
+export interface Citation {
+  evidence_id: string;
+  stable_id: string;
+  relative_path: string;
+  location: SourceLocation;
+  is_valid: boolean;
+  reason?: string;
+}
+
+export interface GroundingMetadata {
+  evidence_count: number;
+  cited_evidence_count: number;
+  citation_validation_status: string;
+  total_claims: number;
+  grounded_claims: number;
+  unsupported_claim_count: number;
+  status: string;
+  sufficiency: string;
+}
+
+export interface ExplanationResponse {
+  repository_id: string;
+  question: string;
+  status: string;
+  answer: string;
+  claims?: ExplanationClaim[];
+  evidence?: ExplanationEvidence[];
+  citations?: Citation[];
+  grounding: GroundingMetadata;
+  provider?: string;
+  model?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  latency_ms?: number;
+  citation_validation_status: string;
+  is_insufficient_evidence: boolean;
+  error_message?: string;
+}

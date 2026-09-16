@@ -11,6 +11,7 @@ import { AlertTriangle, SplitSquareVertical, GitFork, Bot, Compass } from "lucid
 
 import { SyncWorkspace } from "@/components/sync/SyncWorkspace";
 import { FlowExplorer } from "@/components/flow/FlowExplorer";
+import { ExplanationPanel } from "@/components/ai/ExplanationPanel";
 
 export default function Home() {
   const { activeTab, fetchRepositories, error } = useAppStore();
@@ -30,15 +31,7 @@ export default function Home() {
       case "FLOW":
         return <FlowExplorer />;
       case "AI":
-        return (
-          <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none">
-            <Bot className="w-10 h-10 text-gray-500 mb-3" />
-            <h3 className="text-sm font-bold text-gray-200">AI Code Assistant & Hybrid Retrieval</h3>
-            <p className="text-xs text-gray-400 max-w-sm mt-1">
-              AI explanation workspace and code intelligence chat will be implemented in Checkpoint 6.
-            </p>
-          </div>
-        );
+        return <ExplanationPanel />;
       case "GUIDE":
         return (
           <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none">

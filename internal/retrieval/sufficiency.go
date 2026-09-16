@@ -50,6 +50,9 @@ func (e *DefaultSufficiencyEvaluator) Evaluate(
 			edgeCount++
 		case models.EvidenceTypeCodeSnippet:
 			snippetCount++
+		case models.EvidenceTypeStaticFlow:
+			symbolCount++
+			edgeCount++
 		}
 
 		if item.ResolutionStatus == models.RelStatusResolved {
@@ -65,7 +68,7 @@ func (e *DefaultSufficiencyEvaluator) Evaluate(
 		resolvedRatio = float64(resolvedCount) / float64(totalRelations)
 	}
 
-	targetFound := (symbolCount > 0 || snippetCount > 0)
+	targetFound := (symbolCount > 0 || snippetCount > 0 || edgeCount > 0)
 	sourceAvailable := (snippetCount > 0)
 
 	varietyTypes := 0

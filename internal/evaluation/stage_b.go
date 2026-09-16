@@ -196,7 +196,7 @@ func EvaluateStageB(
 	insufficientPkg, _ := models.NewEvidencePackage(scope, "Missing?", "SYMBOL_LOOKUP", budget)
 	insufficientPkg.Sufficiency = models.EvidenceSufficiencyResult{Status: models.SufficiencyInsufficient}
 	mockProvider := llm.NewMockLLMProvider("Fabricated answer", nil)
-	explanationSvc := llm.NewGroundedExplanationService(mockProvider, validator)
+	explanationSvc := llm.NewGroundedExplanationService(mockProvider, validator, nil, nil)
 
 	insuffResult, err := explanationSvc.Explain(ctx, scope, insufficientPkg)
 	insuffHandled := (err == nil && insuffResult != nil && insuffResult.CitationValidationStatus == "NO_CITATIONS_PRESENT")

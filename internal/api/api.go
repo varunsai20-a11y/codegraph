@@ -13,8 +13,10 @@ import (
 	"codegraph/internal/config"
 	"codegraph/internal/graph"
 	"codegraph/internal/ingestion"
+	"codegraph/internal/llm"
 	"codegraph/internal/models"
 	"codegraph/internal/repository"
+	"codegraph/internal/retrieval"
 	"codegraph/internal/security"
 	"codegraph/internal/storage"
 
@@ -24,11 +26,16 @@ import (
 )
 
 type Server struct {
-	cfg     *config.Config
-	store   storage.Storage
-	wsMgr   *repository.WorkspaceManager
-	indexer *ingestion.Indexer
-	router  chi.Router
+	cfg                *config.Config
+	store              storage.Storage
+	wsMgr              *repository.WorkspaceManager
+	indexer            *ingestion.Indexer
+	explanationService llm.ExplanationService
+	router             chi.Router
+}
+
+func (s *Server) SetExplanationService(svc llm.ExplanationService) {
+	s.explanationService = svc
 }
 
 func NewServer(cfg *config.Config, store storage.Storage, wsMgr *repository.WorkspaceManager, indexer *ingestion.Indexer) *Server {
@@ -111,6 +118,7 @@ func (s *Server) routes() {
 		r.Get("/repositories/{id}/graph/impact", s.handleGetGraphImpact)
 		r.Get("/repositories/{id}/graph/hierarchy", s.handleGetGraphHierarchy)
 		r.Get("/repositories/{id}/flow", s.handleGetFlow)
+		r.Post("/repositories/{id}/explain", s.handleExplainRepository)
 		r.Get("/index-jobs/{id}", s.handleGetIndexJob)
 	})
 }
@@ -705,4 +713,82 @@ func (s *Server) respondJSON(w http.ResponseWriter, status int, payload interfac
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+type ExplainRequestBody struct {
+	Query      string   `json:"query"`
+	Question   string   `json:"question,omitempty"`
+	SymbolID   string   `json:"symbol_id,omitempty"`
+	NodeIDs    []string `json:"node_ids,omitempty"`
+	EdgeIDs    []string `json:"edge_ids,omitempty"`
+	RootSymbol string   `json:"root_symbol,omitempty"`
+	TargetNode string   `json:"target_node,omitempty"`
+	Flow       bool     `json:"flow,omitempty"`
+	Provider   string   `json:"provider,omitempty"`
+	Model      string   `json:"model,omitempty"`
+}
+
+func (s *Server) handleExplainRepository(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	repo, err := s.store.GetRepository(r.Context(), id)
+	if err != nil || repo == nil {
+		s.respondJSON(w, http.StatusNotFound, map[string]string{"error": "repository not found"})
+		return
+	}
+
+	var body ExplainRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err.Error() != "EOF" {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+		return
+	}
+
+	query := strings.TrimSpace(body.Query)
+	if query == "" {
+		query = strings.TrimSpace(body.Question)
+	}
+	if query == "" {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "query or question is required"})
+		return
+	}
+
+	scope, err := models.NewRepositoryScope(id)
+	if err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	expReq, err := models.NewExplanationRequest(scope, query)
+	if err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	expReq.SymbolID = body.SymbolID
+	expReq.NodeIDs = body.NodeIDs
+	expReq.EdgeIDs = body.EdgeIDs
+	expReq.Provider = body.Provider
+	expReq.Model = body.Model
+
+	// Attach C5 static flow context if requested or root_symbol provided
+	if (body.Flow || body.RootSymbol != "") && body.RootSymbol != "" {
+		engine, found := s.getOrLoadEngine(r.Context(), id)
+		if found {
+			flowResult := engine.TraceStaticFlow(body.RootSymbol, body.TargetNode, 10, 50)
+			expReq.StaticFlow = flowResult
+		}
+	}
+
+	svc := s.explanationService
+	if svc == nil {
+		composer := retrieval.NewDefaultEvidenceComposer(nil, nil, s.store)
+		svc = llm.NewGroundedExplanationService(nil, nil, composer, nil)
+	}
+
+	resp, err := svc.ExplainRequest(r.Context(), expReq)
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.respondJSON(w, http.StatusOK, resp)
 }

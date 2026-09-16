@@ -138,6 +138,25 @@ export class CodeGraphAPIClient {
     const endpoint = `/api/repositories/${id}/flow?${queryString}`;
     return this.request<StaticFlowResult>(endpoint, { signal });
   }
+
+  async explainCode(
+    id: string,
+    payload: {
+      query: string;
+      symbol_id?: string;
+      root_symbol?: string;
+      target_node?: string;
+      flow?: boolean;
+      provider?: string;
+    },
+    signal?: AbortSignal
+  ): Promise<any> {
+    return this.request<any>(`/api/repositories/${id}/explain`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+      signal,
+    });
+  }
 }
 
 export const apiClient = new CodeGraphAPIClient();

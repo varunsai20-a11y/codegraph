@@ -2,6 +2,7 @@
 
 import React from "react";
 import { GraphNode, GraphEdge } from "@/lib/types";
+import { useAppStore } from "@/store/useAppStore";
 import {
   Info,
   Maximize2,
@@ -14,6 +15,7 @@ import {
   ArrowUpRight,
   ArrowDownLeft,
   GitFork,
+  Bot,
 } from "lucide-react";
 
 interface GraphInspectorProps {
@@ -143,6 +145,18 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
             <span>Trace Static Flow</span>
           </button>
         )}
+
+        <button
+          onClick={() => {
+            const store = useAppStore.getState();
+            store.fetchExplanation(`Explain symbol ${selectedNode.label}`, { symbolId: selectedNode.id });
+            store.setActiveTab("AI");
+          }}
+          className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-md bg-sky-600/20 border border-sky-500/40 hover:bg-sky-600/30 text-sky-200 font-semibold text-xs transition"
+        >
+          <Bot className="w-3.5 h-3.5 text-sky-400" />
+          <span>Explain with AI</span>
+        </button>
 
         <button
           onClick={() => onExpandNode(selectedNode.id)}

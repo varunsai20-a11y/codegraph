@@ -13,7 +13,9 @@ import {
   ArrowRight,
   ShieldCheck,
   HelpCircle,
+  Bot,
 } from "lucide-react";
+import { useAppStore } from "@/store/useAppStore";
 
 interface FlowInspectorProps {
   selectedStep: FlowStep | null;
@@ -132,6 +134,27 @@ export const FlowInspector: React.FC<FlowInspectorProps> = ({
 
       {/* Action Buttons */}
       <div className="space-y-2 pt-3 border-t border-border">
+        <button
+          onClick={() => {
+            const store = useAppStore.getState();
+            if (store.flowResult) {
+              store.fetchExplanation(
+                `Explain flow step #${selectedStep.sequence}: ${selectedStep.node?.label || selectedStep.node_id}`,
+                {
+                  rootSymbol: store.flowResult.root_node_id,
+                  targetNode: store.flowResult.target_node_id,
+                  flow: true,
+                }
+              );
+              store.setActiveTab("AI");
+            }
+          }}
+          className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-md bg-sky-600/20 border border-sky-500/40 hover:bg-sky-600/30 text-sky-200 font-semibold text-xs transition"
+        >
+          <Bot className="w-3.5 h-3.5 text-sky-400" />
+          <span>Explain Flow Step with AI</span>
+        </button>
+
         {node?.relative_path && (
           <button
             onClick={() => onViewSource(selectedStep.node_id)}

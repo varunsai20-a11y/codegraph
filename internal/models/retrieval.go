@@ -44,6 +44,7 @@ const (
 	EvidenceTypeGraphEdge   EvidenceType = "EVIDENCE_GRAPH_EDGE"
 	EvidenceTypeCodeSnippet EvidenceType = "EVIDENCE_CODE_SNIPPET"
 	EvidenceTypeDependency  EvidenceType = "EVIDENCE_DEPENDENCY"
+	EvidenceTypeStaticFlow  EvidenceType = "EVIDENCE_STATIC_FLOW"
 )
 
 type TargetResolutionStatus string
