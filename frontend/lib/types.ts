@@ -118,3 +118,58 @@ export interface GraphQueryParams {
   node_types?: string;
   edge_types?: string;
 }
+
+export type FlowTerminationReason =
+  | "TARGET_REACHED"
+  | "DEPTH_LIMIT"
+  | "NODE_LIMIT"
+  | "NO_PATH"
+  | "CYCLE_BOUNDARY"
+  | "INVALID_ROOT"
+  | "TARGET_NOT_FOUND"
+  | "MAX_PATHS_REACHED";
+
+export interface FlowStep {
+  sequence: number;
+  node_id: string;
+  node: GraphNode;
+  incoming_edge?: GraphEdge;
+  outgoing_edge?: GraphEdge;
+}
+
+export interface FlowPath {
+  path_id: string;
+  steps: FlowStep[];
+  length: number;
+  contains_cycle: boolean;
+  reaches_target: boolean;
+  has_external_call: boolean;
+  has_unresolved_call: boolean;
+}
+
+export interface StaticFlowResult {
+  repository_id: string;
+  root_node_id: string;
+  target_node_id?: string;
+  flow_type: string;
+  max_depth: number;
+  max_nodes: number;
+  nodes_visited: number;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  path?: FlowPath;
+  termination_reason: FlowTerminationReason;
+  truncated: boolean;
+  cycle_detected: boolean;
+  multiple_paths_possible: boolean;
+  query_latency_ms: number;
+  notice: string;
+}
+
+export interface FlowQueryParams {
+  root: string;
+  target?: string;
+  max_depth?: number;
+  max_nodes?: number;
+  max_paths?: number;
+}

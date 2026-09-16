@@ -4,6 +4,8 @@ import {
   FileContentResponse,
   GraphResponse,
   GraphQueryParams,
+  StaticFlowResult,
+  FlowQueryParams,
   APIError,
 } from "./types";
 
@@ -118,6 +120,23 @@ export class CodeGraphAPIClient {
     const queryString = query.toString();
     const endpoint = `/api/repositories/${id}/graph${queryString ? `?${queryString}` : ""}`;
     return this.request<GraphResponse>(endpoint, { signal });
+  }
+
+  async getStaticFlow(
+    id: string,
+    params: FlowQueryParams,
+    signal?: AbortSignal
+  ): Promise<StaticFlowResult> {
+    const query = new URLSearchParams();
+    query.set("root", params.root);
+    if (params.target) query.set("target", params.target);
+    if (params.max_depth) query.set("max_depth", params.max_depth.toString());
+    if (params.max_nodes) query.set("max_nodes", params.max_nodes.toString());
+    if (params.max_paths) query.set("max_paths", params.max_paths.toString());
+
+    const queryString = query.toString();
+    const endpoint = `/api/repositories/${id}/flow?${queryString}`;
+    return this.request<StaticFlowResult>(endpoint, { signal });
   }
 }
 

@@ -51,6 +51,7 @@ export const SyncWorkspace: React.FC = () => {
     setGraphEdgeTypesFilter,
     resetGraph,
     fetchGraph,
+    traceFlowFromSymbol,
   } = useAppStore();
 
   const activeRepoID = activeRepo?.id;
@@ -279,6 +280,7 @@ export const SyncWorkspace: React.FC = () => {
                 edges={graphEdges}
                 onExpandNode={handleExpandGraphNode}
                 onViewInExplorer={(nodeID) => syncSourceFromGraphNode(nodeID)}
+                onTraceFlow={(symbolID) => traceFlowFromSymbol(symbolID)}
                 isLoading={isLoadingGraph}
               />
             </div>

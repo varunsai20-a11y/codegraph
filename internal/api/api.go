@@ -110,6 +110,7 @@ func (s *Server) routes() {
 		r.Get("/repositories/{id}/graph/dependencies", s.handleGetGraphDependencies)
 		r.Get("/repositories/{id}/graph/impact", s.handleGetGraphImpact)
 		r.Get("/repositories/{id}/graph/hierarchy", s.handleGetGraphHierarchy)
+		r.Get("/repositories/{id}/flow", s.handleGetFlow)
 		r.Get("/index-jobs/{id}", s.handleGetIndexJob)
 	})
 }
@@ -647,6 +648,57 @@ func (s *Server) handleGetIndexJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondJSON(w, http.StatusOK, job)
+}
+
+func (s *Server) handleGetFlow(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	repo, err := s.store.GetRepository(r.Context(), id)
+	if err != nil || repo == nil {
+		s.respondJSON(w, http.StatusNotFound, map[string]string{"error": "repository not found"})
+		return
+	}
+
+	query := r.URL.Query()
+	rootID := query.Get("root")
+	if rootID == "" {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "root query parameter is required"})
+		return
+	}
+
+	targetID := query.Get("target")
+
+	maxDepth := 10
+	if mdStr := query.Get("max_depth"); mdStr != "" {
+		if md, err := strconv.Atoi(mdStr); err == nil && md > 0 {
+			maxDepth = md
+		}
+	}
+
+	maxNodes := 50
+	if mnStr := query.Get("max_nodes"); mnStr != "" {
+		if mn, err := strconv.Atoi(mnStr); err == nil && mn > 0 {
+			maxNodes = mn
+		}
+	}
+
+	engine, found := s.getOrLoadEngine(r.Context(), id)
+	if !found {
+		s.respondJSON(w, http.StatusOK, &models.StaticFlowResult{
+			RepositoryID:      id,
+			RootNodeID:        rootID,
+			TargetNodeID:      targetID,
+			FlowType:          "STATIC_CALL_GRAPH",
+			MaxDepth:          maxDepth,
+			MaxNodes:          maxNodes,
+			TerminationReason: models.FlowReasonInvalidRoot,
+			Notice:            "STATIC FLOW ≠ RUNTIME TRACE: CodeGraph derives this flow from statically analyzed CALLS relationships. It does not observe runtime execution.",
+		})
+		return
+	}
+
+	flowResult := engine.TraceStaticFlow(rootID, targetID, maxDepth, maxNodes)
+	s.respondJSON(w, http.StatusOK, flowResult)
 }
 
 func (s *Server) respondJSON(w http.ResponseWriter, status int, payload interface{}) {

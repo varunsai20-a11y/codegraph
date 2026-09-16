@@ -6,6 +6,8 @@ import {
   GraphNode,
   GraphEdge,
   GraphQueryParams,
+  StaticFlowResult,
+  FlowQueryParams,
 } from "@/lib/types";
 import { apiClient } from "@/lib/api-client";
 
@@ -14,6 +16,7 @@ export type NavigationTab = "EXPLORER" | "GRAPH" | "SYNC" | "FLOW" | "AI" | "GUI
 let manifestAbortController: AbortController | null = null;
 let sourceAbortController: AbortController | null = null;
 let graphAbortController: AbortController | null = null;
+let flowAbortController: AbortController | null = null;
 
 interface AppState {
   repositories: Repository[];
@@ -40,6 +43,15 @@ interface AppState {
   isLoadingGraph: boolean;
   graphError: string | null;
 
+  // C5 Static Flow State
+  flowResult: StaticFlowResult | null;
+  flowRootNodeID: string | null;
+  flowTargetNodeID: string | null;
+  flowMaxDepth: number;
+  selectedFlowStepIndex: number | null;
+  isLoadingFlow: boolean;
+  flowError: string | null;
+
   isLoadingRepos: boolean;
   isLoadingManifest: boolean;
   isLoadingSource: boolean;
@@ -59,6 +71,20 @@ interface AppState {
   setGraphNodeTypesFilter: (types: Set<string>) => void;
   setGraphEdgeTypesFilter: (types: Set<string>) => void;
   setGraphNodeLimit: (limit: number) => void;
+
+  // C5 Flow Actions
+  fetchStaticFlow: (
+    repoID: string,
+    rootID: string,
+    targetID?: string,
+    maxDepth?: number
+  ) => Promise<void>;
+  setFlowRootNodeID: (nodeID: string | null) => void;
+  setFlowTargetNodeID: (nodeID: string | null) => void;
+  setFlowMaxDepth: (depth: number) => void;
+  selectFlowStep: (index: number | null) => void;
+  traceFlowFromSymbol: (symbolID: string, targetTab?: NavigationTab) => void;
+
   resetGraph: (repoID: string) => Promise<void>;
   toggleExpandPath: (path: string) => void;
   setExpandedPaths: (paths: Set<string>) => void;
@@ -121,6 +147,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   isLoadingManifest: false,
   isLoadingSource: false,
 
+  // C5 Flow Defaults
+  flowResult: null,
+  flowRootNodeID: null,
+  flowTargetNodeID: null,
+  flowMaxDepth: 10,
+  selectedFlowStepIndex: null,
+  isLoadingFlow: false,
+  flowError: null,
+
   error: null,
   manifestError: null,
   sourceError: null,
@@ -170,6 +205,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       graphAbortController.abort();
       graphAbortController = null;
     }
+    if (flowAbortController) {
+      flowAbortController.abort();
+      flowAbortController = null;
+    }
 
     const repos = get().repositories;
     const active = repos.find((r) => r.id === id) || null;
@@ -189,9 +228,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       graphEdges: [],
       graphScope: "OVERVIEW",
       expandedNodeIDs: new Set<string>(),
+      flowResult: null,
+      flowRootNodeID: null,
+      flowTargetNodeID: null,
+      selectedFlowStepIndex: null,
       manifestError: null,
       sourceError: null,
       graphError: null,
+      flowError: null,
     });
 
     if (active) {
@@ -511,6 +555,105 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   navigateToGraphFromSource: () => {
     set({ activeTab: "GRAPH" });
+  },
+
+  // C5 Flow Actions
+  fetchStaticFlow: async (
+    repoID: string,
+    rootID: string,
+    targetID?: string,
+    maxDepth?: number
+  ) => {
+    if (flowAbortController) {
+      flowAbortController.abort();
+    }
+    flowAbortController = new AbortController();
+    const signal = flowAbortController.signal;
+
+    set({
+      isLoadingFlow: true,
+      flowError: null,
+      flowRootNodeID: rootID,
+      flowTargetNodeID: targetID || null,
+    });
+
+    try {
+      const res = await apiClient.getStaticFlow(
+        repoID,
+        { root: rootID, target: targetID, max_depth: maxDepth || get().flowMaxDepth },
+        signal
+      );
+
+      if (get().activeRepoID !== repoID) return;
+
+      const steps = res.path?.steps || [];
+      const hasSteps = steps.length > 0;
+
+      set({
+        flowResult: res,
+        selectedFlowStepIndex: hasSteps ? 0 : null,
+        isLoadingFlow: false,
+      });
+
+      if (hasSteps) {
+        get().selectFlowStep(0);
+      }
+    } catch (err: any) {
+      if (err.message === "Request cancelled" || signal.aborted) return;
+      if (get().activeRepoID === repoID) {
+        set({
+          isLoadingFlow: false,
+          flowError: err.message || "Failed to trace static call flow",
+        });
+      }
+    }
+  },
+
+  setFlowRootNodeID: (nodeID: string | null) => set({ flowRootNodeID: nodeID }),
+  setFlowTargetNodeID: (nodeID: string | null) => set({ flowTargetNodeID: nodeID }),
+  setFlowMaxDepth: (depth: number) => set({ flowMaxDepth: depth }),
+
+  selectFlowStep: (index: number | null) => {
+    set({ selectedFlowStepIndex: index });
+    if (index === null) return;
+
+    const res = get().flowResult;
+    const steps = res?.path?.steps;
+    if (!steps || index < 0 || index >= steps.length) return;
+
+    const step = steps[index];
+    if (step && step.node) {
+      set({ selectedNodeID: step.node_id });
+      if (step.node.relative_path) {
+        set({ selectedPath: step.node.relative_path });
+        get().autoExpandParentPaths(step.node.relative_path);
+        const repoID = get().activeRepoID;
+        if (repoID) {
+          get().fetchSourceFile(repoID, step.node.relative_path);
+        }
+      }
+      if (step.node.kind === "NODE_SYMBOL") {
+        set({ selectedSymbolID: step.node.id });
+        if (step.node.location && step.node.location.start_line > 0) {
+          set({ highlightLineRange: [step.node.location.start_line, step.node.location.end_line] });
+        } else {
+          set({ highlightLineRange: null });
+        }
+      }
+    }
+  },
+
+  traceFlowFromSymbol: (symbolID: string, targetTab: NavigationTab = "FLOW") => {
+    const repoID = get().activeRepoID;
+    set({
+      activeTab: targetTab,
+      flowRootNodeID: symbolID,
+      flowTargetNodeID: null,
+      selectedNodeID: symbolID,
+    });
+    if (repoID) {
+      get().fetchStaticFlow(repoID, symbolID);
+    }
   },
 
   setSearchQuery: (query: string) => set({ searchQuery: query }),

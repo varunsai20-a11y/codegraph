@@ -29,6 +29,7 @@ export const GraphExplorer: React.FC = () => {
     resetGraph,
     selectGraphNode,
     navigateToSourceFromGraph,
+    traceFlowFromSymbol,
   } = useAppStore();
 
   const activeRepoID = activeRepo?.id;
@@ -163,6 +164,7 @@ export const GraphExplorer: React.FC = () => {
             edges={graphEdges}
             onExpandNode={handleExpandNode}
             onViewInExplorer={handleViewInExplorer}
+            onTraceFlow={(symbolID) => traceFlowFromSymbol(symbolID)}
             isLoading={isLoadingGraph}
           />
         </div>

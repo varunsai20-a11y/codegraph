@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"codegraph/internal/models"
 )
@@ -557,6 +558,322 @@ func (e *Engine) GetBoundedNeighborhood(params QueryParams) ([]*models.Node, []*
 	sort.Slice(resEdges, func(i, j int) bool { return resEdges[i].ID < resEdges[j].ID })
 
 	return resNodes, resEdges
+}
+
+// TraceStaticFlow calculates a deterministic static call path from rootID (and optional targetID) using EDGE_CALLS edges.
+func (e *Engine) TraceStaticFlow(rootID, targetID string, maxDepth, maxNodes int) *models.StaticFlowResult {
+	start := time.Now()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if maxDepth <= 0 {
+		maxDepth = 10
+	}
+	if maxDepth > 20 {
+		maxDepth = 20
+	}
+	if maxNodes <= 0 {
+		maxNodes = 50
+	}
+	if maxNodes > 100 {
+		maxNodes = 100
+	}
+
+	notice := "STATIC FLOW ≠ RUNTIME TRACE: CodeGraph derives this flow from statically analyzed CALLS relationships. It does not observe runtime execution."
+
+	rootNodeID, rootNode, foundRoot := e.resolveNodeID(models.NodeKindSymbol, rootID)
+	if !foundRoot || rootNode.Kind != models.NodeKindSymbol {
+		return &models.StaticFlowResult{
+			RepositoryID:      e.repoID,
+			RootNodeID:        rootID,
+			TargetNodeID:      targetID,
+			FlowType:          "STATIC_CALL_GRAPH",
+			MaxDepth:          maxDepth,
+			MaxNodes:          maxNodes,
+			TerminationReason: models.FlowReasonInvalidRoot,
+			Notice:            notice,
+			QueryLatencyMs:    float64(time.Since(start).Microseconds()) / 1000.0,
+		}
+	}
+
+	var targetNodeID string
+	var targetNode *models.Node
+	var foundTarget bool
+	if targetID != "" {
+		targetNodeID, targetNode, foundTarget = e.resolveNodeID(models.NodeKindSymbol, targetID)
+		_ = targetNode
+		if !foundTarget || (targetNode != nil && targetNode.Kind != models.NodeKindSymbol) {
+			return &models.StaticFlowResult{
+				RepositoryID:      e.repoID,
+				RootNodeID:        rootNodeID,
+				TargetNodeID:      targetID,
+				FlowType:          "STATIC_CALL_GRAPH",
+				MaxDepth:          maxDepth,
+				MaxNodes:          maxNodes,
+				NodesVisited:      1,
+				Nodes:             []*models.Node{rootNode},
+				TerminationReason: models.FlowReasonTargetNotFound,
+				Notice:            notice,
+				QueryLatencyMs:    float64(time.Since(start).Microseconds()) / 1000.0,
+			}
+		}
+	}
+
+	type queueItem struct {
+		nodes []*models.Node
+		edges []*models.Edge
+	}
+
+	visitedUniqueNodes := make(map[string]bool)
+	visitedUniqueNodes[rootNode.ID] = true
+
+	var selectedNodes []*models.Node
+	var selectedEdges []*models.Edge
+	var terminationReason models.FlowTerminationReason = models.FlowReasonDepthLimit
+	var cycleDetected bool
+	var multiplePathsPossible bool
+
+	if targetNodeID != "" {
+		// BFS to find deterministic shortest path from rootNode to targetNode
+		queue := []queueItem{{nodes: []*models.Node{rootNode}, edges: []*models.Edge{}}}
+		var shortestPath *queueItem
+		var countShortestPaths int
+
+		for len(queue) > 0 {
+			curr := queue[0]
+			queue = queue[1:]
+
+			lastNode := curr.nodes[len(curr.nodes)-1]
+
+			if lastNode.ID == targetNodeID {
+				if shortestPath == nil {
+					shortestPath = &curr
+					countShortestPaths = 1
+					terminationReason = models.FlowReasonTargetReached
+				} else if len(curr.nodes) == len(shortestPath.nodes) {
+					countShortestPaths++
+					multiplePathsPossible = true
+				}
+				continue
+			}
+
+			if lastNode.Kind == models.NodeKindExternalModule {
+				// External module boundary: STOP expansion (do not traverse inside external libraries)
+				continue
+			}
+
+			if shortestPath != nil && len(curr.nodes) >= len(shortestPath.nodes) {
+				continue
+			}
+
+			if len(curr.nodes) > maxDepth {
+				terminationReason = models.FlowReasonDepthLimit
+				continue
+			}
+
+			if len(visitedUniqueNodes) >= maxNodes {
+				terminationReason = models.FlowReasonNodeLimit
+				break
+			}
+
+			// Sort outgoing CALLS edges deterministically by ID
+			var outgoingCalls []*models.Edge
+			for _, ed := range e.outgoingEdges[lastNode.ID] {
+				if ed.Kind == models.EdgeKindCalls {
+					outgoingCalls = append(outgoingCalls, ed)
+				}
+			}
+			sort.Slice(outgoingCalls, func(i, j int) bool { return outgoingCalls[i].ID < outgoingCalls[j].ID })
+
+			for _, ed := range outgoingCalls {
+				nextN, nFound := e.nodes[ed.TargetID]
+				if !nFound {
+					continue
+				}
+
+				// Check for cycle in current path
+				inPath := false
+				for _, pn := range curr.nodes {
+					if pn.ID == nextN.ID {
+						inPath = true
+						break
+					}
+				}
+				if inPath {
+					cycleDetected = true
+					continue
+				}
+
+				visitedUniqueNodes[nextN.ID] = true
+
+				newNodes := append([]*models.Node{}, curr.nodes...)
+				newNodes = append(newNodes, nextN)
+
+				newEdges := append([]*models.Edge{}, curr.edges...)
+				newEdges = append(newEdges, ed)
+
+				queue = append(queue, queueItem{nodes: newNodes, edges: newEdges})
+			}
+		}
+
+		if shortestPath != nil {
+			selectedNodes = shortestPath.nodes
+			selectedEdges = shortestPath.edges
+		} else {
+			selectedNodes = []*models.Node{rootNode}
+			if terminationReason != models.FlowReasonNodeLimit && terminationReason != models.FlowReasonDepthLimit {
+				terminationReason = models.FlowReasonNoPath
+			}
+		}
+	} else {
+		// Target not specified: Build primary call flow path following outgoing CALLS
+		currNodes := []*models.Node{rootNode}
+		currEdges := []*models.Edge{}
+		visitedPathIDs := make(map[string]bool)
+		visitedPathIDs[rootNode.ID] = true
+		terminationReason = models.FlowReasonTargetReached
+
+		curr := rootNode
+		for len(currNodes) <= maxDepth && len(visitedUniqueNodes) < maxNodes {
+			if curr.Kind == models.NodeKindExternalModule {
+				// Stop at external module boundary
+				break
+			}
+
+			var outgoingCalls []*models.Edge
+			for _, ed := range e.outgoingEdges[curr.ID] {
+				if ed.Kind == models.EdgeKindCalls {
+					outgoingCalls = append(outgoingCalls, ed)
+				}
+			}
+
+			if len(outgoingCalls) == 0 {
+				break
+			}
+
+			if len(outgoingCalls) > 1 {
+				multiplePathsPossible = true
+			}
+
+			sort.Slice(outgoingCalls, func(i, j int) bool { return outgoingCalls[i].ID < outgoingCalls[j].ID })
+			nextEdge := outgoingCalls[0]
+			nextNode, nFound := e.nodes[nextEdge.TargetID]
+			if !nFound {
+				break
+			}
+
+			visitedUniqueNodes[nextNode.ID] = true
+
+			if visitedPathIDs[nextNode.ID] {
+				cycleDetected = true
+				break
+			}
+			visitedPathIDs[nextNode.ID] = true
+
+			currEdges = append(currEdges, nextEdge)
+			currNodes = append(currNodes, nextNode)
+			curr = nextNode
+
+			if len(currNodes) > maxDepth {
+				terminationReason = models.FlowReasonDepthLimit
+				break
+			}
+		}
+
+		if len(visitedUniqueNodes) >= maxNodes {
+			terminationReason = models.FlowReasonNodeLimit
+		}
+
+		selectedNodes = currNodes
+		selectedEdges = currEdges
+	}
+
+	collectedNodesMap := make(map[string]*models.Node)
+	for _, n := range selectedNodes {
+		collectedNodesMap[n.ID] = n
+	}
+	var resultNodes []*models.Node
+	for _, n := range collectedNodesMap {
+		resultNodes = append(resultNodes, n)
+	}
+	sort.Slice(resultNodes, func(i, j int) bool { return resultNodes[i].ID < resultNodes[j].ID })
+
+	collectedEdgesMap := make(map[string]*models.Edge)
+	for _, ed := range selectedEdges {
+		collectedEdgesMap[ed.ID] = ed
+	}
+	var resultEdges []*models.Edge
+	for _, ed := range collectedEdgesMap {
+		resultEdges = append(resultEdges, ed)
+	}
+	sort.Slice(resultEdges, func(i, j int) bool { return resultEdges[i].ID < resultEdges[j].ID })
+
+	flowPath := buildFlowPath("primary-path", selectedNodes, selectedEdges, cycleDetected, targetNodeID != "" && terminationReason == models.FlowReasonTargetReached)
+
+	return &models.StaticFlowResult{
+		RepositoryID:          e.repoID,
+		RootNodeID:            rootNodeID,
+		TargetNodeID:          targetNodeID,
+		FlowType:              "STATIC_CALL_GRAPH",
+		MaxDepth:              maxDepth,
+		MaxNodes:              maxNodes,
+		NodesVisited:          len(visitedUniqueNodes),
+		Nodes:                 resultNodes,
+		Edges:                 resultEdges,
+		Path:                  flowPath,
+		TerminationReason:     terminationReason,
+		Truncated:             len(visitedUniqueNodes) >= maxNodes || terminationReason == models.FlowReasonDepthLimit || terminationReason == models.FlowReasonNodeLimit,
+		CycleDetected:         cycleDetected,
+		MultiplePathsPossible: multiplePathsPossible,
+		QueryLatencyMs:        float64(time.Since(start).Microseconds()) / 1000.0,
+		Notice:                notice,
+	}
+}
+
+func buildFlowPath(pathID string, nodes []*models.Node, edges []*models.Edge, containsCycle, reachesTarget bool) *models.FlowPath {
+	steps := make([]*models.FlowStep, len(nodes))
+	hasExternalCall := false
+	hasUnresolvedCall := false
+
+	for i, n := range nodes {
+		if n.Kind == models.NodeKindExternalModule {
+			hasExternalCall = true
+		}
+
+		var inEdge *models.Edge
+		if i > 0 && i-1 < len(edges) {
+			inEdge = edges[i-1]
+			if string(inEdge.Status) == "UNRESOLVED" || string(inEdge.Status) == "PARTIAL" {
+				hasUnresolvedCall = true
+			}
+		}
+
+		var outEdge *models.Edge
+		if i < len(edges) {
+			outEdge = edges[i]
+			if string(outEdge.Status) == "UNRESOLVED" || string(outEdge.Status) == "PARTIAL" {
+				hasUnresolvedCall = true
+			}
+		}
+
+		steps[i] = &models.FlowStep{
+			Sequence:     i + 1,
+			NodeID:       n.ID,
+			Node:         n,
+			IncomingEdge: inEdge,
+			OutgoingEdge: outEdge,
+		}
+	}
+
+	return &models.FlowPath{
+		PathID:            pathID,
+		Steps:             steps,
+		Length:            len(nodes),
+		ContainsCycle:     containsCycle,
+		ReachesTarget:     reachesTarget,
+		HasExternalCall:   hasExternalCall,
+		HasUnresolvedCall: hasUnresolvedCall,
+	}
 }
 
 // Stats returns node and edge count metrics.

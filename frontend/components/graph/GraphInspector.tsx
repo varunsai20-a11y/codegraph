@@ -13,6 +13,7 @@ import {
   MapPin,
   ArrowUpRight,
   ArrowDownLeft,
+  GitFork,
 } from "lucide-react";
 
 interface GraphInspectorProps {
@@ -21,6 +22,7 @@ interface GraphInspectorProps {
   edges: GraphEdge[];
   onExpandNode: (nodeID: string) => void;
   onViewInExplorer: (nodeID: string) => void;
+  onTraceFlow?: (symbolID: string) => void;
   isLoading: boolean;
 }
 
@@ -29,6 +31,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
   edges,
   onExpandNode,
   onViewInExplorer,
+  onTraceFlow,
   isLoading,
 }) => {
   if (!selectedNode) {
@@ -131,6 +134,16 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
 
       {/* Action Buttons */}
       <div className="space-y-2 pt-3 border-t border-border">
+        {isSymbol && onTraceFlow && (
+          <button
+            onClick={() => onTraceFlow(selectedNode.id)}
+            className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-md bg-purple-600/20 border border-purple-500/40 hover:bg-purple-600/30 text-purple-200 font-semibold text-xs transition"
+          >
+            <GitFork className="w-3.5 h-3.5 text-purple-400" />
+            <span>Trace Static Flow</span>
+          </button>
+        )}
+
         <button
           onClick={() => onExpandNode(selectedNode.id)}
           disabled={isLoading}

@@ -244,3 +244,51 @@ type ImpactAnalysisResult struct {
 	ImpactedFiles   []string `json:"impacted_files"`
 	ImpactedSymbols []string `json:"impacted_symbols"`
 }
+
+type FlowTerminationReason string
+
+const (
+	FlowReasonTargetReached  FlowTerminationReason = "TARGET_REACHED"
+	FlowReasonDepthLimit     FlowTerminationReason = "DEPTH_LIMIT"
+	FlowReasonNodeLimit      FlowTerminationReason = "NODE_LIMIT"
+	FlowReasonNoPath         FlowTerminationReason = "NO_PATH"
+	FlowReasonInvalidRoot    FlowTerminationReason = "INVALID_ROOT"
+	FlowReasonTargetNotFound FlowTerminationReason = "TARGET_NOT_FOUND"
+)
+
+type FlowStep struct {
+	Sequence     int    `json:"sequence"`
+	NodeID       string `json:"node_id"`
+	Node         *Node  `json:"node"`
+	IncomingEdge *Edge  `json:"incoming_edge,omitempty"`
+	OutgoingEdge *Edge  `json:"outgoing_edge,omitempty"`
+}
+
+type FlowPath struct {
+	PathID            string      `json:"path_id"`
+	Steps             []*FlowStep `json:"steps"`
+	Length            int         `json:"length"`
+	ContainsCycle     bool        `json:"contains_cycle"`
+	ReachesTarget     bool        `json:"reaches_target"`
+	HasExternalCall   bool        `json:"has_external_call"`
+	HasUnresolvedCall bool        `json:"has_unresolved_call"`
+}
+
+type StaticFlowResult struct {
+	RepositoryID          string                `json:"repository_id"`
+	RootNodeID            string                `json:"root_node_id"`
+	TargetNodeID          string                `json:"target_node_id,omitempty"`
+	FlowType              string                `json:"flow_type"` // Always "STATIC_CALL_GRAPH"
+	MaxDepth              int                   `json:"max_depth"`
+	MaxNodes              int                   `json:"max_nodes"`
+	NodesVisited          int                   `json:"nodes_visited"`
+	Nodes                 []*Node               `json:"nodes"`
+	Edges                 []*Edge               `json:"edges"`
+	Path                  *FlowPath             `json:"path,omitempty"`
+	TerminationReason     FlowTerminationReason `json:"termination_reason"`
+	Truncated             bool                  `json:"truncated"`
+	CycleDetected         bool                  `json:"cycle_detected"`
+	MultiplePathsPossible bool                  `json:"multiple_paths_possible"`
+	QueryLatencyMs        float64               `json:"query_latency_ms"`
+	Notice                string                `json:"notice"`
+}
