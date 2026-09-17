@@ -167,7 +167,7 @@ func (s *Server) handleGetSourceFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Prepare workspace path
-	workspacePath, err := s.wsMgr.PrepareWorkspace(repo)
+	workspacePath, err := s.wsMgr.PrepareWorkspace(r.Context(), repo)
 	if err != nil {
 		s.respondJSON(w, http.StatusNotFound, map[string]string{"error": "repository workspace unavailable"})
 		return
@@ -275,30 +275,69 @@ func (s *Server) handleRegisterRepository(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.Name == "" {
-		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "repository name is required"})
-		return
-	}
-
 	if req.SourceType != models.SourceTypeLocal && req.SourceType != models.SourceTypeGit {
 		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "source_type must be LOCAL or GIT"})
 		return
 	}
 
+	var canonicalURL string
+	if req.SourceType == models.SourceTypeGit {
+		var extractedName string
+		var err error
+		canonicalURL, extractedName, err = security.ValidateGitHubURL(req.SourceURL)
+		if err != nil {
+			s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if req.Name == "" {
+			req.Name = extractedName
+		}
+	} else {
+		if req.Name == "" {
+			s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "repository name is required"})
+			return
+		}
+	}
+
+	// Single process registration mutex lock for fallback mode & race safety
+	s.store.RegistrationLock().Lock()
+	defer s.store.RegistrationLock().Unlock()
+
+	// Application-level lookup for deduplication
+	if canonicalURL != "" {
+		if existing, err := s.store.GetRepositoryByCanonicalURL(r.Context(), canonicalURL); err == nil {
+			s.respondJSON(w, http.StatusOK, existing)
+			return
+		}
+	} else if req.SourceURL != "" {
+		if existing, err := s.store.GetRepositoryBySourceURL(r.Context(), req.SourceURL); err == nil {
+			s.respondJSON(w, http.StatusOK, existing)
+			return
+		}
+	}
+
 	repoID := uuid.New().String()
 	now := time.Now()
 	repo := &models.Repository{
-		ID:         repoID,
-		Name:       req.Name,
-		SourceType: req.SourceType,
-		SourceURL:  req.SourceURL,
-		LocalPath:  req.LocalPath,
-		Status:     models.RepoStatusRegistered,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:           repoID,
+		Name:         req.Name,
+		SourceType:   req.SourceType,
+		SourceURL:    req.SourceURL,
+		CanonicalURL: canonicalURL,
+		LocalPath:    req.LocalPath,
+		Status:       models.RepoStatusRegistered,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	if err := s.store.CreateRepository(r.Context(), repo); err != nil {
+		// Catch UNIQUE constraint collision and resolve to existing repository
+		if canonicalURL != "" {
+			if existing, lookupErr := s.store.GetRepositoryByCanonicalURL(r.Context(), canonicalURL); lookupErr == nil {
+				s.respondJSON(w, http.StatusOK, existing)
+				return
+			}
+		}
 		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -336,6 +375,12 @@ func (s *Server) handleStartIndexJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Race safety: Check if active job already exists
+	if activeJob, err := s.store.GetActiveIndexJobForRepository(r.Context(), repo.ID); err == nil && activeJob != nil {
+		s.respondJSON(w, http.StatusOK, activeJob)
+		return
+	}
+
 	jobID := uuid.New().String()
 	job := &models.IndexJob{
 		ID:           jobID,
@@ -345,10 +390,16 @@ func (s *Server) handleStartIndexJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.store.CreateIndexJob(r.Context(), job); err != nil {
+		// Catch UNIQUE constraint collision on active job index
+		if activeJob, lookupErr := s.store.GetActiveIndexJobForRepository(r.Context(), repo.ID); lookupErr == nil && activeJob != nil {
+			s.respondJSON(w, http.StatusOK, activeJob)
+			return
+		}
 		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
+	// Background indexer goroutine is launched ONLY when job creation succeeds
 	go func() {
 		ctx := context.Background()
 		_ = s.indexer.RunIndex(ctx, job, repo)

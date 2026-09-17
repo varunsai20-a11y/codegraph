@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"sync"
 
 	"codegraph/internal/models"
 )
@@ -9,6 +10,8 @@ import (
 type RepositoryStore interface {
 	CreateRepository(ctx context.Context, repo *models.Repository) error
 	GetRepository(ctx context.Context, id string) (*models.Repository, error)
+	GetRepositoryByCanonicalURL(ctx context.Context, canonicalURL string) (*models.Repository, error)
+	GetRepositoryBySourceURL(ctx context.Context, sourceURL string) (*models.Repository, error)
 	ListRepositories(ctx context.Context) ([]*models.Repository, error)
 	UpdateRepositoryStatus(ctx context.Context, id string, status models.RepositoryStatus) error
 }
@@ -16,6 +19,8 @@ type RepositoryStore interface {
 type IndexJobStore interface {
 	CreateIndexJob(ctx context.Context, job *models.IndexJob) error
 	GetIndexJob(ctx context.Context, id string) (*models.IndexJob, error)
+	GetActiveIndexJobForRepository(ctx context.Context, repoID string) (*models.IndexJob, error)
+	GetLatestIndexJobForRepo(ctx context.Context, repoID string) (*models.IndexJob, error)
 	UpdateIndexJob(ctx context.Context, job *models.IndexJob) error
 }
 
@@ -42,6 +47,7 @@ type Storage interface {
 	ManifestStore
 	CodeIntelligenceStore
 	GraphStore
+	RegistrationLock() *sync.Mutex
 	SaveIndexData(ctx context.Context, repoID string, manifests []*models.FileManifestItem, symbols []*models.Symbol, rels []*models.Relationship, nodes []*models.Node, edges []*models.Edge) error
 	Close() error
 }

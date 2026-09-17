@@ -1,10 +1,12 @@
 package repository
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"codegraph/internal/models"
 	"codegraph/internal/security"
@@ -28,12 +30,12 @@ func NewWorkspaceManager(workspaceRoot string) (*WorkspaceManager, error) {
 }
 
 // PrepareWorkspace acquires or verifies repository path inside controlled workspace.
-func (wm *WorkspaceManager) PrepareWorkspace(repo *models.Repository) (string, error) {
+func (wm *WorkspaceManager) PrepareWorkspace(ctx context.Context, repo *models.Repository) (string, error) {
 	switch repo.SourceType {
 	case models.SourceTypeLocal:
 		return wm.prepareLocalWorkspace(repo)
 	case models.SourceTypeGit:
-		return wm.prepareGitWorkspace(repo)
+		return wm.prepareGitWorkspace(ctx, repo)
 	default:
 		return "", fmt.Errorf("unsupported repository source type: %s", repo.SourceType)
 	}
@@ -53,9 +55,14 @@ func (wm *WorkspaceManager) prepareLocalWorkspace(repo *models.Repository) (stri
 	return cleanPath, nil
 }
 
-func (wm *WorkspaceManager) prepareGitWorkspace(repo *models.Repository) (string, error) {
+func (wm *WorkspaceManager) prepareGitWorkspace(ctx context.Context, repo *models.Repository) (string, error) {
 	if repo.SourceURL == "" {
 		return "", fmt.Errorf("git repository source_url cannot be empty")
+	}
+
+	// 1. Check if git binary exists on system PATH
+	if _, err := exec.LookPath("git"); err != nil {
+		return "", fmt.Errorf("git executable not found on server system PATH. Please install git to enable GitHub repository imports.")
 	}
 
 	targetDir := filepath.Join(wm.WorkspaceRoot, repo.ID)
@@ -68,9 +75,20 @@ func (wm *WorkspaceManager) prepareGitWorkspace(repo *models.Repository) (string
 		return targetDir, nil
 	}
 
-	// Acquire git repo without executing repo scripts
-	cmd := exec.Command("git", "clone", "--depth", "1", repo.SourceURL, targetDir)
+	// 2. Derive a 3-minute clone timeout from parent indexing context
+	cloneCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+
+	// Acquire git repo safely with argument terminator --
+	cmd := exec.CommandContext(cloneCtx, "git", "clone", "--depth", "1", "--", repo.SourceURL, targetDir)
 	output, err := cmd.CombinedOutput()
+
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("indexing context cancelled during git clone: %w", ctx.Err())
+	}
+	if cloneCtx.Err() == context.DeadlineExceeded {
+		return "", fmt.Errorf("git clone operation timed out after 3 minutes")
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to clone git repository: %w, output: %s", err, string(output))
 	}

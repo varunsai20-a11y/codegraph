@@ -81,7 +81,7 @@ func (idx *Indexer) RunIndex(ctx context.Context, job *models.IndexJob, repo *mo
 	_ = idx.store.UpdateRepositoryStatus(ctx, repo.ID, models.RepoStatusIndexing)
 
 	// 1. Prepare Workspace
-	repoWorkspace, err := idx.wsMgr.PrepareWorkspace(repo)
+	repoWorkspace, err := idx.wsMgr.PrepareWorkspace(ctx, repo)
 	if err != nil {
 		return idx.failJob(ctx, job, repo, fmt.Errorf("repository workspace preparation failed: %w", err))
 	}

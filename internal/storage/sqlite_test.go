@@ -126,3 +126,139 @@ func TestSQLiteStorage_ConcurrentReadersAndWriters(t *testing.T) {
 	}
 }
 
+func TestSingleInstanceStartupGuard(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "instance_lock_test.db")
+
+	store1, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("failed to init first storage instance: %v", err)
+	}
+
+	// Attempt second storage instance against same database path
+	store2, err := NewSQLiteStorage(dbPath)
+	if err == nil {
+		store2.Close()
+		store1.Close()
+		t.Fatalf("expected second storage instance to fail with process lock conflict, got nil error")
+	}
+
+	t.Logf("Second instance correctly rejected: %v", err)
+
+	// Close first instance and verify lock release
+	if err := store1.Close(); err != nil {
+		t.Fatalf("failed to close first storage instance: %v", err)
+	}
+
+	// Now third instance should succeed
+	store3, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("expected third storage instance to succeed after lock release, got: %v", err)
+	}
+	defer store3.Close()
+}
+
+func TestSQLite_CanonicalURLAndHistoricalVariantPreservation(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "canonical_test.db")
+
+	store, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	rawURL := "https://GitHub.COM/Gin-Gonic/Gin.git/"
+	canonicalURL := "https://github.com/gin-gonic/gin"
+
+	repo := &models.Repository{
+		ID:           "repo-hist-1",
+		Name:         "Gin",
+		SourceType:   models.SourceTypeGit,
+		SourceURL:    rawURL,
+		CanonicalURL: canonicalURL,
+		LocalPath:    "/tmp/gin",
+		Status:       models.RepoStatusIndexed,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+
+	if err := store.CreateRepository(ctx, repo); err != nil {
+		t.Fatalf("CreateRepository failed: %v", err)
+	}
+
+	// 1. Query by canonical URL
+	fetchedByCanon, err := store.GetRepositoryByCanonicalURL(ctx, canonicalURL)
+	if err != nil {
+		t.Fatalf("GetRepositoryByCanonicalURL failed: %v", err)
+	}
+	if fetchedByCanon.SourceURL != rawURL {
+		t.Errorf("expected SourceURL to remain unchanged raw string '%s', got '%s'", rawURL, fetchedByCanon.SourceURL)
+	}
+
+	// 2. Query by variant source URL
+	fetchedBySrc, err := store.GetRepositoryBySourceURL(ctx, "https://github.com/gin-gonic/gin")
+	if err != nil {
+		t.Fatalf("GetRepositoryBySourceURL failed: %v", err)
+	}
+	if fetchedBySrc.ID != repo.ID {
+		t.Errorf("expected matched repo ID %s, got %s", repo.ID, fetchedBySrc.ID)
+	}
+}
+
+func TestSQLite_OrphanJobRecovery(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "orphan_test.db")
+
+	store1, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("failed to init storage 1: %v", err)
+	}
+
+	ctx := context.Background()
+	repo := &models.Repository{
+		ID:         "repo-orphan",
+		Name:       "Orphan Repo",
+		SourceType: models.SourceTypeGit,
+		LocalPath:  "/tmp/orphan",
+		Status:     models.RepoStatusIndexing,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	if err := store1.CreateRepository(ctx, repo); err != nil {
+		t.Fatalf("CreateRepository failed: %v", err)
+	}
+
+	job := &models.IndexJob{
+		ID:           "job-stale-1",
+		RepositoryID: repo.ID,
+		Status:       models.JobStatusRunning,
+		StartedAt:    time.Now().Add(-5 * time.Minute),
+	}
+	if err := store1.CreateIndexJob(ctx, job); err != nil {
+		t.Fatalf("CreateIndexJob failed: %v", err)
+	}
+
+	// Simulate server process exit
+	store1.Close()
+
+	// Re-open storage (simulating server restart)
+	store2, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("failed to init storage 2: %v", err)
+	}
+	defer store2.Close()
+
+	recoveredJob, err := store2.GetIndexJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetIndexJob failed: %v", err)
+	}
+
+	if recoveredJob.Status != models.JobStatusFailed {
+		t.Errorf("expected stale job status FAILED after restart, got %s", recoveredJob.Status)
+	}
+	if recoveredJob.Error != "Job marked failed due to server process restart" {
+		t.Errorf("expected restart error message, got %s", recoveredJob.Error)
+	}
+}

@@ -6,10 +6,26 @@ export interface Repository {
   name: string;
   source_type: SourceType;
   source_url?: string;
+  canonical_url?: string;
   local_path?: string;
   status: RepoStatus;
   created_at: string;
   updated_at: string;
+}
+
+export type JobStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+
+export interface IndexJob {
+  id: string;
+  repository_id: string;
+  status: JobStatus;
+  started_at: string;
+  completed_at?: string;
+  files_discovered: number;
+  files_indexed: number;
+  files_skipped: number;
+  files_failed: number;
+  error?: string;
 }
 
 export type FileStatus =

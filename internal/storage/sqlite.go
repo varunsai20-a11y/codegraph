@@ -5,30 +5,47 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"codegraph/internal/models"
+	"codegraph/internal/security"
 
 	_ "modernc.org/sqlite"
 )
 
 type SQLiteStorage struct {
-	db *sql.DB
+	db                      *sql.DB
+	processLock             *ProcessLock
+	regMutex                sync.Mutex
+	hasUniqueCanonicalIndex bool
 }
 
 func NewSQLiteStorage(dbPath string) (*SQLiteStorage, error) {
+	// Acquire OS process lock before database initialization
+	lockPath := dbPath + ".lock"
+	pLock, err := NewProcessLock(lockPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to acquire database instance lock: %w", err)
+	}
+
 	dsn := dbPath
 	if !strings.Contains(dsn, "?") {
 		dsn += "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
+		_ = pLock.Release()
 		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
 	}
 
-	s := &SQLiteStorage{db: db}
+	s := &SQLiteStorage{
+		db:          db,
+		processLock: pLock,
+	}
 	if err := s.initSchema(); err != nil {
-		db.Close()
+		_ = db.Close()
+		_ = pLock.Release()
 		return nil, fmt.Errorf("failed to initialize sqlite schema: %w", err)
 	}
 
@@ -44,6 +61,7 @@ func (s *SQLiteStorage) initSchema() error {
 		name TEXT NOT NULL,
 		source_type TEXT NOT NULL,
 		source_url TEXT,
+		canonical_url TEXT,
 		local_path TEXT NOT NULL,
 		default_branch TEXT,
 		commit_sha TEXT,
@@ -148,37 +166,109 @@ func (s *SQLiteStorage) initSchema() error {
 		FOREIGN KEY(repository_id) REFERENCES repositories(id)
 	);
 	`
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Ensure canonical_url column exists for upgraded databases
+	_, _ = s.db.Exec(`ALTER TABLE repositories ADD COLUMN canonical_url TEXT;`)
+
+	// Backfill canonical_url for existing GIT repositories
+	rows, err := s.db.Query(`SELECT id, source_url FROM repositories WHERE source_type = 'GIT' AND (canonical_url IS NULL OR canonical_url = '')`)
+	if err == nil {
+		type backfillItem struct {
+			id, sourceURL string
+		}
+		var items []backfillItem
+		for rows.Next() {
+			var id, srcURL sql.NullString
+			if err := rows.Scan(&id, &srcURL); err == nil && id.Valid && srcURL.Valid && srcURL.String != "" {
+				items = append(items, backfillItem{id: id.String, sourceURL: srcURL.String})
+			}
+		}
+		rows.Close()
+
+		for _, item := range items {
+			if canonical, err := security.CanonicalizeSourceURL(item.sourceURL); err == nil {
+				_, _ = s.db.Exec(`UPDATE repositories SET canonical_url = ? WHERE id = ?`, canonical, item.id)
+			}
+		}
+	}
+
+	// Pre-check for duplicate canonical_url records
+	var dupCount int
+	err = s.db.QueryRow(`SELECT COUNT(*) FROM (
+		SELECT canonical_url FROM repositories 
+		WHERE canonical_url IS NOT NULL AND canonical_url != '' 
+		GROUP BY canonical_url HAVING COUNT(*) > 1
+	)`).Scan(&dupCount)
+
+	if err == nil && dupCount > 0 {
+		fmt.Printf("[MIGRATION WARN] Detected %d duplicate canonical_url groups in existing repositories. Unique index idx_repositories_canonical_url deferred.\n", dupCount)
+		s.hasUniqueCanonicalIndex = false
+	} else {
+		_, err = s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_repositories_canonical_url ON repositories(canonical_url) WHERE canonical_url IS NOT NULL AND canonical_url != '';`)
+		if err == nil {
+			s.hasUniqueCanonicalIndex = true
+		} else {
+			s.hasUniqueCanonicalIndex = false
+		}
+	}
+
+	// Startup Recovery: Mark all PENDING or RUNNING jobs from prior server instances as FAILED
+	_, _ = s.db.Exec(`UPDATE index_jobs SET status = 'FAILED', error = 'Job marked failed due to server process restart' WHERE status IN ('PENDING', 'RUNNING');`)
+
+	// Create active index job unique index
+	_, _ = s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_active_index_jobs ON index_jobs(repository_id) WHERE status IN ('PENDING', 'RUNNING');`)
+
+	return nil
+}
+
+func (s *SQLiteStorage) RegistrationLock() *sync.Mutex {
+	return &s.regMutex
 }
 
 func (s *SQLiteStorage) Close() error {
-	return s.db.Close()
+	var errs []string
+	if s.db != nil {
+		if err := s.db.Close(); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if s.processLock != nil {
+		if err := s.processLock.Release(); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("errors closing storage: %s", strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // RepositoryStore implementations
 
 func (s *SQLiteStorage) CreateRepository(ctx context.Context, repo *models.Repository) error {
 	query := `
-	INSERT INTO repositories (id, name, source_type, source_url, local_path, default_branch, commit_sha, status, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO repositories (id, name, source_type, source_url, canonical_url, local_path, default_branch, commit_sha, status, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err := s.db.ExecContext(ctx, query,
-		repo.ID, repo.Name, repo.SourceType, repo.SourceURL, repo.LocalPath,
+		repo.ID, repo.Name, repo.SourceType, repo.SourceURL, repo.CanonicalURL, repo.LocalPath,
 		repo.DefaultBranch, repo.CommitSHA, repo.Status, repo.CreatedAt, repo.UpdatedAt,
 	)
 	return err
 }
 
 func (s *SQLiteStorage) GetRepository(ctx context.Context, id string) (*models.Repository, error) {
-	query := `SELECT id, name, source_type, source_url, local_path, default_branch, commit_sha, status, created_at, updated_at FROM repositories WHERE id = ?`
+	query := `SELECT id, name, source_type, source_url, canonical_url, local_path, default_branch, commit_sha, status, created_at, updated_at FROM repositories WHERE id = ?`
 	row := s.db.QueryRowContext(ctx, query, id)
 
 	var repo models.Repository
-	var srcUrl, defBranch, commitSha sql.NullString
+	var srcUrl, canonUrl, defBranch, commitSha sql.NullString
 
 	err := row.Scan(
-		&repo.ID, &repo.Name, &repo.SourceType, &srcUrl, &repo.LocalPath,
+		&repo.ID, &repo.Name, &repo.SourceType, &srcUrl, &canonUrl, &repo.LocalPath,
 		&defBranch, &commitSha, &repo.Status, &repo.CreatedAt, &repo.UpdatedAt,
 	)
 	if err != nil {
@@ -189,6 +279,70 @@ func (s *SQLiteStorage) GetRepository(ctx context.Context, id string) (*models.R
 	}
 
 	repo.SourceURL = srcUrl.String
+	repo.CanonicalURL = canonUrl.String
+	repo.DefaultBranch = defBranch.String
+	repo.CommitSHA = commitSha.String
+
+	return &repo, nil
+}
+
+func (s *SQLiteStorage) GetRepositoryByCanonicalURL(ctx context.Context, canonicalURL string) (*models.Repository, error) {
+	if canonicalURL == "" {
+		return nil, fmt.Errorf("canonicalURL cannot be empty")
+	}
+	query := `SELECT id, name, source_type, source_url, canonical_url, local_path, default_branch, commit_sha, status, created_at, updated_at FROM repositories WHERE canonical_url = ? ORDER BY created_at ASC LIMIT 1`
+	row := s.db.QueryRowContext(ctx, query, canonicalURL)
+
+	var repo models.Repository
+	var srcUrl, canonUrl, defBranch, commitSha sql.NullString
+
+	err := row.Scan(
+		&repo.ID, &repo.Name, &repo.SourceType, &srcUrl, &canonUrl, &repo.LocalPath,
+		&defBranch, &commitSha, &repo.Status, &repo.CreatedAt, &repo.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("repository not found with canonical_url: %s", canonicalURL)
+		}
+		return nil, err
+	}
+
+	repo.SourceURL = srcUrl.String
+	repo.CanonicalURL = canonUrl.String
+	repo.DefaultBranch = defBranch.String
+	repo.CommitSHA = commitSha.String
+
+	return &repo, nil
+}
+
+func (s *SQLiteStorage) GetRepositoryBySourceURL(ctx context.Context, sourceURL string) (*models.Repository, error) {
+	// First compute canonical URL if valid GitHub URL
+	if canonical, err := security.CanonicalizeSourceURL(sourceURL); err == nil {
+		if repo, err := s.GetRepositoryByCanonicalURL(ctx, canonical); err == nil {
+			return repo, nil
+		}
+	}
+
+	// Fallback to exact raw source_url match
+	query := `SELECT id, name, source_type, source_url, canonical_url, local_path, default_branch, commit_sha, status, created_at, updated_at FROM repositories WHERE source_url = ? ORDER BY created_at ASC LIMIT 1`
+	row := s.db.QueryRowContext(ctx, query, sourceURL)
+
+	var repo models.Repository
+	var srcUrl, canonUrl, defBranch, commitSha sql.NullString
+
+	err := row.Scan(
+		&repo.ID, &repo.Name, &repo.SourceType, &srcUrl, &canonUrl, &repo.LocalPath,
+		&defBranch, &commitSha, &repo.Status, &repo.CreatedAt, &repo.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("repository not found with source_url: %s", sourceURL)
+		}
+		return nil, err
+	}
+
+	repo.SourceURL = srcUrl.String
+	repo.CanonicalURL = canonUrl.String
 	repo.DefaultBranch = defBranch.String
 	repo.CommitSHA = commitSha.String
 
@@ -196,7 +350,7 @@ func (s *SQLiteStorage) GetRepository(ctx context.Context, id string) (*models.R
 }
 
 func (s *SQLiteStorage) ListRepositories(ctx context.Context) ([]*models.Repository, error) {
-	query := `SELECT id, name, source_type, source_url, local_path, default_branch, commit_sha, status, created_at, updated_at FROM repositories ORDER BY created_at DESC`
+	query := `SELECT id, name, source_type, source_url, canonical_url, local_path, default_branch, commit_sha, status, created_at, updated_at FROM repositories ORDER BY created_at DESC`
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -206,14 +360,15 @@ func (s *SQLiteStorage) ListRepositories(ctx context.Context) ([]*models.Reposit
 	var results []*models.Repository
 	for rows.Next() {
 		var repo models.Repository
-		var srcUrl, defBranch, commitSha sql.NullString
+		var srcUrl, canonUrl, defBranch, commitSha sql.NullString
 		if err := rows.Scan(
-			&repo.ID, &repo.Name, &repo.SourceType, &srcUrl, &repo.LocalPath,
+			&repo.ID, &repo.Name, &repo.SourceType, &srcUrl, &canonUrl, &repo.LocalPath,
 			&defBranch, &commitSha, &repo.Status, &repo.CreatedAt, &repo.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
 		repo.SourceURL = srcUrl.String
+		repo.CanonicalURL = canonUrl.String
 		repo.DefaultBranch = defBranch.String
 		repo.CommitSHA = commitSha.String
 		results = append(results, &repo)
@@ -225,6 +380,60 @@ func (s *SQLiteStorage) UpdateRepositoryStatus(ctx context.Context, id string, s
 	query := `UPDATE repositories SET status = ?, updated_at = ? WHERE id = ?`
 	_, err := s.db.ExecContext(ctx, query, status, time.Now(), id)
 	return err
+}
+
+func (s *SQLiteStorage) GetActiveIndexJobForRepository(ctx context.Context, repoID string) (*models.IndexJob, error) {
+	query := `SELECT id, repository_id, status, started_at, completed_at, files_discovered, files_indexed, files_skipped, files_failed, error FROM index_jobs WHERE repository_id = ? AND status IN ('PENDING', 'RUNNING') LIMIT 1`
+	row := s.db.QueryRowContext(ctx, query, repoID)
+
+	var job models.IndexJob
+	var errStr sql.NullString
+	var compAt sql.NullTime
+
+	err := row.Scan(
+		&job.ID, &job.RepositoryID, &job.Status, &job.StartedAt, &compAt,
+		&job.FilesDiscovered, &job.FilesIndexed, &job.FilesSkipped, &job.FilesFailed, &errStr,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("no active index job for repository: %s", repoID)
+		}
+		return nil, err
+	}
+
+	if compAt.Valid {
+		job.CompletedAt = &compAt.Time
+	}
+	job.Error = errStr.String
+
+	return &job, nil
+}
+
+func (s *SQLiteStorage) GetLatestIndexJobForRepo(ctx context.Context, repoID string) (*models.IndexJob, error) {
+	query := `SELECT id, repository_id, status, started_at, completed_at, files_discovered, files_indexed, files_skipped, files_failed, error FROM index_jobs WHERE repository_id = ? ORDER BY started_at DESC LIMIT 1`
+	row := s.db.QueryRowContext(ctx, query, repoID)
+
+	var job models.IndexJob
+	var errStr sql.NullString
+	var compAt sql.NullTime
+
+	err := row.Scan(
+		&job.ID, &job.RepositoryID, &job.Status, &job.StartedAt, &compAt,
+		&job.FilesDiscovered, &job.FilesIndexed, &job.FilesSkipped, &job.FilesFailed, &errStr,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("no index job found for repository: %s", repoID)
+		}
+		return nil, err
+	}
+
+	if compAt.Valid {
+		job.CompletedAt = &compAt.Time
+	}
+	job.Error = errStr.String
+
+	return &job, nil
 }
 
 // IndexJobStore implementations

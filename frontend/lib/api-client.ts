@@ -1,5 +1,7 @@
 import {
   Repository,
+  SourceType,
+  IndexJob,
   FileManifestItem,
   FileContentResponse,
   GraphResponse,
@@ -79,6 +81,28 @@ export class CodeGraphAPIClient {
 
   async getRepository(id: string, signal?: AbortSignal): Promise<Repository> {
     return this.request<Repository>(`/api/repositories/${id}`, { signal });
+  }
+
+  async registerRepository(
+    payload: { name?: string; source_type: SourceType; source_url?: string; local_path?: string },
+    signal?: AbortSignal
+  ): Promise<Repository> {
+    return this.request<Repository>("/api/repositories", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      signal,
+    });
+  }
+
+  async startIndexJob(repoId: string, signal?: AbortSignal): Promise<IndexJob> {
+    return this.request<IndexJob>(`/api/repositories/${repoId}/index`, {
+      method: "POST",
+      signal,
+    });
+  }
+
+  async getIndexJob(jobId: string, signal?: AbortSignal): Promise<IndexJob> {
+    return this.request<IndexJob>(`/api/index-jobs/${jobId}`, { signal });
   }
 
   async getRepositoryFiles(id: string, signal?: AbortSignal): Promise<FileManifestItem[]> {

@@ -24,6 +24,7 @@ type Repository struct {
 	Name          string           `json:"name"`
 	SourceType    SourceType       `json:"source_type"`
 	SourceURL     string           `json:"source_url,omitempty"`
+	CanonicalURL  string           `json:"canonical_url,omitempty"`
 	LocalPath     string           `json:"local_path"`
 	DefaultBranch string           `json:"default_branch,omitempty"`
 	CommitSHA     string           `json:"commit_sha,omitempty"`
