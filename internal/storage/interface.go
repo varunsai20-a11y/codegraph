@@ -42,5 +42,6 @@ type Storage interface {
 	ManifestStore
 	CodeIntelligenceStore
 	GraphStore
+	SaveIndexData(ctx context.Context, repoID string, manifests []*models.FileManifestItem, symbols []*models.Symbol, rels []*models.Relationship, nodes []*models.Node, edges []*models.Edge) error
 	Close() error
 }

@@ -88,8 +88,11 @@ func (s *GroundedExplanationService) Explain(
 
 	resp, err := s.provider.Generate(ctx, req)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return nil, fmt.Errorf("%w: %v", ErrProviderTimeout, err)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("%w: %w", ErrProviderTimeout, err)
 		}
 		return nil, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
 	}
@@ -188,8 +191,11 @@ func (s *GroundedExplanationService) ExplainRequest(
 	// 4. Generate LLM completion
 	llmResp, err := s.provider.Generate(ctx, llmReq)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return nil, fmt.Errorf("%w: %v", ErrProviderTimeout, err)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("%w: %w", ErrProviderTimeout, err)
 		}
 		return nil, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
 	}

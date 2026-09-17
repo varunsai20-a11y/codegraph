@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"codegraph/internal/models"
@@ -16,7 +17,11 @@ type SQLiteStorage struct {
 }
 
 func NewSQLiteStorage(dbPath string) (*SQLiteStorage, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	dsn := dbPath
+	if !strings.Contains(dsn, "?") {
+		dsn += "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
 	}
@@ -31,6 +36,8 @@ func NewSQLiteStorage(dbPath string) (*SQLiteStorage, error) {
 }
 
 func (s *SQLiteStorage) initSchema() error {
+	_, _ = s.db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`)
+
 	schema := `
 	CREATE TABLE IF NOT EXISTS repositories (
 		id TEXT PRIMARY KEY,
@@ -602,4 +609,186 @@ func (s *SQLiteStorage) GetGraphForRepository(ctx context.Context, repoID string
 	}
 
 	return nodes, edges, nil
+}
+
+// SaveIndexData atomically persists all index artifacts (manifests, symbols, relationships, graph_nodes, graph_edges) for a repository in a single transaction.
+func (s *SQLiteStorage) SaveIndexData(
+	ctx context.Context,
+	repoID string,
+	manifests []*models.FileManifestItem,
+	symbols []*models.Symbol,
+	rels []*models.Relationship,
+	nodes []*models.Node,
+	edges []*models.Edge,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	delQueries := []string{
+		`DELETE FROM file_manifests WHERE repository_id = ?`,
+		`DELETE FROM symbols WHERE repository_id = ?`,
+		`DELETE FROM relationships WHERE repository_id = ?`,
+		`DELETE FROM graph_nodes WHERE repository_id = ?`,
+		`DELETE FROM graph_edges WHERE repository_id = ?`,
+	}
+	for _, q := range delQueries {
+		if _, err := tx.ExecContext(ctx, q, repoID); err != nil {
+			return err
+		}
+	}
+
+	manifestStmt, err := tx.PrepareContext(ctx, `
+	INSERT INTO file_manifests (id, repository_id, relative_path, language, extension, size, sha256, status, error_message, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(repository_id, relative_path) DO UPDATE SET
+		language=excluded.language,
+		extension=excluded.extension,
+		size=excluded.size,
+		sha256=excluded.sha256,
+		status=excluded.status,
+		error_message=excluded.error_message,
+		updated_at=excluded.updated_at
+	`)
+	if err != nil {
+		return err
+	}
+	defer manifestStmt.Close()
+
+	for _, item := range manifests {
+		_, err := manifestStmt.ExecContext(ctx,
+			item.ID, repoID, item.RelativePath, item.Language, item.Extension,
+			item.Size, item.SHA256, item.Status, item.ErrorMessage, item.UpdatedAt,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	symStmt, err := tx.PrepareContext(ctx, `
+	INSERT INTO symbols (id, repository_id, file_id, relative_path, name, qualified_name, kind, parent_id, start_line, start_column, end_line, end_column, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		name=excluded.name,
+		qualified_name=excluded.qualified_name,
+		kind=excluded.kind,
+		parent_id=excluded.parent_id,
+		start_line=excluded.start_line,
+		start_column=excluded.start_column,
+		end_line=excluded.end_line,
+		end_column=excluded.end_column,
+		updated_at=excluded.updated_at
+	`)
+	if err != nil {
+		return err
+	}
+	defer symStmt.Close()
+
+	for _, sym := range symbols {
+		var parentID sql.NullString
+		if sym.ParentID != "" {
+			parentID.String = sym.ParentID
+			parentID.Valid = true
+		}
+		_, err := symStmt.ExecContext(ctx,
+			sym.ID, repoID, sym.FileID, sym.RelativePath, sym.Name, sym.QualifiedName,
+			string(sym.Kind), parentID, sym.Location.StartLine, sym.Location.StartColumn,
+			sym.Location.EndLine, sym.Location.EndColumn, sym.UpdatedAt,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	relStmt, err := tx.PrepareContext(ctx, `
+	INSERT INTO relationships (id, repository_id, source_id, target_id, target_kind, type, status, file_id, start_line, start_column, end_line, end_column, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		target_kind=excluded.target_kind,
+		type=excluded.type,
+		status=excluded.status,
+		start_line=excluded.start_line,
+		start_column=excluded.start_column,
+		end_line=excluded.end_line,
+		end_column=excluded.end_column,
+		updated_at=excluded.updated_at
+	`)
+	if err != nil {
+		return err
+	}
+	defer relStmt.Close()
+
+	for _, rel := range rels {
+		_, err := relStmt.ExecContext(ctx,
+			rel.ID, repoID, rel.SourceID, rel.TargetID, string(rel.TargetKind),
+			string(rel.Type), string(rel.Status), rel.FileID, rel.Location.StartLine,
+			rel.Location.StartColumn, rel.Location.EndLine, rel.Location.EndColumn, rel.UpdatedAt,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	nodeStmt, err := tx.PrepareContext(ctx, `
+	INSERT INTO graph_nodes (id, repository_id, kind, label, qualified_name, file_id, relative_path, start_line, start_column, end_line, end_column, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		label=excluded.label,
+		qualified_name=excluded.qualified_name,
+		file_id=excluded.file_id,
+		relative_path=excluded.relative_path,
+		start_line=excluded.start_line,
+		start_column=excluded.start_column,
+		end_line=excluded.end_line,
+		end_column=excluded.end_column,
+		updated_at=excluded.updated_at
+	`)
+	if err != nil {
+		return err
+	}
+	defer nodeStmt.Close()
+
+	for _, n := range nodes {
+		_, err := nodeStmt.ExecContext(ctx,
+			n.ID, repoID, string(n.Kind), n.Label, n.QualifiedName,
+			n.FileID, n.RelativePath, n.Location.StartLine, n.Location.StartColumn,
+			n.Location.EndLine, n.Location.EndColumn, n.UpdatedAt,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	edgeStmt, err := tx.PrepareContext(ctx, `
+	INSERT INTO graph_edges (id, repository_id, source_id, target_id, target_kind, kind, status, file_id, start_line, start_column, end_line, end_column, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		target_kind=excluded.target_kind,
+		kind=excluded.kind,
+		status=excluded.status,
+		start_line=excluded.start_line,
+		start_column=excluded.start_column,
+		end_line=excluded.end_line,
+		end_column=excluded.end_column,
+		updated_at=excluded.updated_at
+	`)
+	if err != nil {
+		return err
+	}
+	defer edgeStmt.Close()
+
+	for _, e := range edges {
+		_, err := edgeStmt.ExecContext(ctx,
+			e.ID, repoID, e.SourceID, e.TargetID, string(e.TargetKind),
+			string(e.Kind), string(e.Status), e.FileID, e.Location.StartLine,
+			e.Location.StartColumn, e.Location.EndLine, e.Location.EndColumn, e.UpdatedAt,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }

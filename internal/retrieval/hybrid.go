@@ -166,6 +166,9 @@ func (e *HybridRetrieverEngine) Retrieve(
 
 	// Fault tolerance: If all attempted retrievers failed, return error
 	if len(tasks) > 0 && len(succeeded) == 0 {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("%w: %v", ErrAllRetrieversFailed, failed)
 	}
 

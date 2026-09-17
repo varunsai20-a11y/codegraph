@@ -43,6 +43,10 @@ func (p *Pipeline) RunAnalysis(ctx context.Context, repo *models.Repository, fil
 	}
 
 	for _, df := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		lang := p.detector.DetectLanguage(df.AbsolutePath)
 		if lang == language.LangUnknown {
 			continue

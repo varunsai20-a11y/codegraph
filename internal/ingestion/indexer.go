@@ -28,8 +28,9 @@ type Indexer struct {
 	pipeline     *analysis.Pipeline
 	synchronizer *graph.Synchronizer
 
-	mu           sync.RWMutex
-	graphEngines map[string]*graph.Engine
+	mu               sync.RWMutex
+	graphEngines     map[string]*graph.Engine
+	onPostSaveCommit func(repoID string) error
 }
 
 func NewIndexer(cfg *config.Config, store storage.Storage, wsMgr *repository.WorkspaceManager) *Indexer {
@@ -57,6 +58,18 @@ func (idx *Indexer) GetGraphEngine(repoID string) (*graph.Engine, bool) {
 	defer idx.mu.RUnlock()
 	engine, found := idx.graphEngines[repoID]
 	return engine, found
+}
+
+func (idx *Indexer) SetGraphEngine(repoID string, engine *graph.Engine) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.graphEngines[repoID] = engine
+}
+
+func (idx *Indexer) InvalidateEngine(repoID string) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	delete(idx.graphEngines, repoID)
 }
 
 // RunIndex executes ingestion, static analysis, and graph construction.
@@ -87,6 +100,10 @@ func (idx *Indexer) RunIndex(ctx context.Context, job *models.IndexJob, repo *mo
 
 	// 3. Process Discovered Files
 	for _, df := range discovered {
+		if err := ctx.Err(); err != nil {
+			return idx.failJob(ctx, job, repo, fmt.Errorf("indexing canceled: %w", err))
+		}
+
 		item := &models.FileManifestItem{
 			ID:           fmt.Sprintf("%s:%s", repo.ID, df.RelativePath),
 			RepositoryID: repo.ID,
@@ -130,30 +147,46 @@ func (idx *Indexer) RunIndex(ctx context.Context, job *models.IndexJob, repo *mo
 		manifestItems = append(manifestItems, item)
 	}
 
-	// 4. Save Manifest
-	if err := idx.store.SaveManifestItems(ctx, repo.ID, manifestItems); err != nil {
-		return idx.failJob(ctx, job, repo, fmt.Errorf("failed to save repository manifest: %w", err))
+	// 4. Phase 2 Static Analysis Pass
+	analysisResult, err := idx.pipeline.RunAnalysis(ctx, repo, analyzableFiles)
+	if err != nil {
+		return idx.failJob(ctx, job, repo, fmt.Errorf("static analysis pass failed: %w", err))
 	}
 
-	// 5. Phase 2 Static Analysis Pass
-	analysisResult, err := idx.pipeline.RunAnalysis(ctx, repo, analyzableFiles)
-	if err == nil {
-		_ = idx.store.SaveSymbols(ctx, repo.ID, analysisResult.Symbols)
-		_ = idx.store.SaveRelationships(ctx, repo.ID, analysisResult.Relationships)
+	// 5. Phase 3 Code Knowledge Graph Synchronization
+	nodes, edges, syncErr := idx.synchronizer.Synchronize(ctx, repo, manifestItems, analysisResult)
+	if syncErr != nil {
+		return idx.failJob(ctx, job, repo, fmt.Errorf("graph synchronization failed: %w", syncErr))
+	}
 
-		// 6. Phase 3 Code Knowledge Graph Synchronization
-		nodes, edges, syncErr := idx.synchronizer.Synchronize(ctx, repo, manifestItems, analysisResult)
-		if syncErr == nil {
-			_ = idx.store.SaveGraph(ctx, repo.ID, nodes, edges)
+	// 6. Pre-build and fully load new Engine in memory before SQLite commit
+	newEngine := graph.NewEngine(repo.ID)
+	newEngine.LoadGraph(nodes, edges)
 
-			engine := graph.NewEngine(repo.ID)
-			engine.LoadGraph(nodes, edges)
+	var saveErr error
+	var published bool
+	defer func() {
+		if saveErr == nil && !published {
+			// SaveIndexData committed V2 to SQLite, but cache publication did not complete.
+			// Invalidate cache so readers fall back to loading V2 from SQLite instead of keeping stale V1.
+			idx.InvalidateEngine(repo.ID)
+		}
+	}()
 
-			idx.mu.Lock()
-			idx.graphEngines[repo.ID] = engine
-			idx.mu.Unlock()
+	// 7. Atomic Persistence to SQLite in a single transaction
+	if saveErr = idx.store.SaveIndexData(ctx, repo.ID, manifestItems, analysisResult.Symbols, analysisResult.Relationships, nodes, edges); saveErr != nil {
+		return idx.failJob(ctx, job, repo, fmt.Errorf("failed to save index data: %w", saveErr))
+	}
+
+	if idx.onPostSaveCommit != nil {
+		if hookErr := idx.onPostSaveCommit(repo.ID); hookErr != nil {
+			return idx.failJob(ctx, job, repo, fmt.Errorf("post-commit hook error: %w", hookErr))
 		}
 	}
+
+	// 8. Immediately publish pre-built engine to cache
+	idx.SetGraphEngine(repo.ID, newEngine)
+	published = true
 
 	compTime := time.Now()
 	job.Status = models.JobStatusCompleted

@@ -284,10 +284,15 @@ func (o *DefaultGuideOrchestrator) buildDeterministicSteps(
 		step4.SymbolID = entrySym.ID
 		step4.SymbolName = entrySym.Name
 		step4.RelativePath = entrySym.RelativePath
-		// Attach static flow trace if engine is available
-		flowEngine := graph.NewEngine(scope.RepositoryID)
-		flowRes := flowEngine.TraceStaticFlow(entrySym.ID, highConnNode.ID, 10, 50)
-		step4.FlowResult = flowRes
+		// Attach static flow trace if graph is available
+		if o.store != nil {
+			nodes, edges, err := o.store.GetGraphForRepository(ctx, scope.RepositoryID)
+			if err == nil && len(nodes) > 0 {
+				flowEngine := graph.NewEngine(scope.RepositoryID)
+				flowEngine.LoadGraph(nodes, edges)
+				step4.FlowResult = flowEngine.TraceStaticFlow(entrySym.ID, highConnNode.ID, 10, 50)
+			}
+		}
 	}
 	steps = append(steps, step4)
 

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -639,9 +640,11 @@ func (s *Server) handleGetGraphHierarchy(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) getOrLoadEngine(ctx context.Context, repoID string) (*graph.Engine, bool) {
-	engine, found := s.indexer.GetGraphEngine(repoID)
-	if found {
-		return engine, true
+	if s.indexer != nil {
+		engine, found := s.indexer.GetGraphEngine(repoID)
+		if found {
+			return engine, true
+		}
 	}
 
 	// Fallback load from SQLite
@@ -650,8 +653,11 @@ func (s *Server) getOrLoadEngine(ctx context.Context, repoID string) (*graph.Eng
 		return nil, false
 	}
 
-	engine = graph.NewEngine(repoID)
+	engine := graph.NewEngine(repoID)
 	engine.LoadGraph(nodes, edges)
+	if s.indexer != nil {
+		s.indexer.SetGraphEngine(repoID, engine)
+	}
 	return engine, true
 }
 
@@ -793,6 +799,9 @@ func (s *Server) handleExplainRepository(w http.ResponseWriter, r *http.Request)
 
 	resp, err := svc.ExplainRequest(r.Context(), expReq)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
 		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -868,6 +877,9 @@ func (s *Server) handleGetGuide(w http.ResponseWriter, r *http.Request) {
 
 	inv, err := orch.Guide(r.Context(), req)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
 		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
