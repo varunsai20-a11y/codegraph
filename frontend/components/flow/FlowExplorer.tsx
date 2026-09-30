@@ -94,6 +94,7 @@ export const FlowExplorer: React.FC = () => {
         <div className="flex-1 bg-background overflow-hidden relative">
           <FlowCanvas
             flowResult={flowResult}
+            flowRootNodeID={flowRootNodeID}
             selectedStepIndex={selectedFlowStepIndex}
             onSelectStep={handleSelectStep}
             isLoading={isLoadingFlow}

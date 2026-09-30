@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"codegraph/internal/retrieval"
 	"codegraph/internal/security"
 	"codegraph/internal/storage"
+	"codegraph/internal/vector"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -124,6 +126,7 @@ func (s *Server) routes() {
 		r.Get("/repositories/{id}/graph/dependencies", s.handleGetGraphDependencies)
 		r.Get("/repositories/{id}/graph/impact", s.handleGetGraphImpact)
 		r.Get("/repositories/{id}/graph/hierarchy", s.handleGetGraphHierarchy)
+		r.Get("/repositories/{id}/architecture-flow", s.handleGetArchitectureFlow)
 		r.Get("/repositories/{id}/flow", s.handleGetFlow)
 		r.Post("/repositories/{id}/explain", s.handleExplainRepository)
 		r.Post("/repositories/{id}/guide", s.handleGetGuide)
@@ -488,11 +491,16 @@ func (s *Server) handleGetGraph(w http.ResponseWriter, r *http.Request) {
 		maxHops = 2
 	}
 
-	nodeLimit := 20
+	nodeLimit := 25
 	if scope == "NEIGHBORHOOD" {
 		nodeLimit = 50
 	}
 	if lStr := query.Get("node_limit"); lStr != "" {
+		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
+			nodeLimit = l
+		}
+	}
+	if lStr := query.Get("limit"); lStr != "" {
 		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
 			nodeLimit = l
 		}
@@ -690,6 +698,31 @@ func (s *Server) handleGetGraphHierarchy(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+func (s *Server) handleGetArchitectureFlow(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	repo, err := s.store.GetRepository(r.Context(), id)
+	if err != nil || repo == nil {
+		s.respondJSON(w, http.StatusNotFound, map[string]string{"error": "repository not found"})
+		return
+	}
+
+	engine, found := s.getOrLoadEngine(r.Context(), id)
+	if !found {
+		s.respondJSON(w, http.StatusOK, &models.ArchitectureDiagram{
+			RepositoryID: id,
+			Modules:      []*models.ArchitectureModule{},
+			Edges:        []*models.ArchitectureEdge{},
+			MermaidCode:  "graph TD\n    empty[\"No graph data indexed\"]",
+			TotalModules: 0,
+			TotalEdges:   0,
+		})
+		return
+	}
+
+	diag := engine.GetArchitectureFlow()
+	s.respondJSON(w, http.StatusOK, diag)
+}
+
 func (s *Server) getOrLoadEngine(ctx context.Context, repoID string) (*graph.Engine, bool) {
 	if s.indexer != nil {
 		engine, found := s.indexer.GetGraphEngine(repoID)
@@ -780,16 +813,17 @@ func (s *Server) respondJSON(w http.ResponseWriter, status int, payload interfac
 }
 
 type ExplainRequestBody struct {
-	Query      string   `json:"query"`
-	Question   string   `json:"question,omitempty"`
-	SymbolID   string   `json:"symbol_id,omitempty"`
-	NodeIDs    []string `json:"node_ids,omitempty"`
-	EdgeIDs    []string `json:"edge_ids,omitempty"`
-	RootSymbol string   `json:"root_symbol,omitempty"`
-	TargetNode string   `json:"target_node,omitempty"`
-	Flow       bool     `json:"flow,omitempty"`
-	Provider   string   `json:"provider,omitempty"`
-	Model      string   `json:"model,omitempty"`
+	Query      string               `json:"query"`
+	Question   string               `json:"question,omitempty"`
+	SymbolID   string               `json:"symbol_id,omitempty"`
+	NodeIDs    []string             `json:"node_ids,omitempty"`
+	EdgeIDs    []string             `json:"edge_ids,omitempty"`
+	RootSymbol string               `json:"root_symbol,omitempty"`
+	TargetNode string               `json:"target_node,omitempty"`
+	Flow       bool                 `json:"flow,omitempty"`
+	History    []models.ChatMessage `json:"history,omitempty"`
+	Provider   string               `json:"provider,omitempty"`
+	Model      string               `json:"model,omitempty"`
 }
 
 func (s *Server) handleExplainRepository(w http.ResponseWriter, r *http.Request) {
@@ -830,6 +864,7 @@ func (s *Server) handleExplainRepository(w http.ResponseWriter, r *http.Request)
 	expReq.SymbolID = body.SymbolID
 	expReq.NodeIDs = body.NodeIDs
 	expReq.EdgeIDs = body.EdgeIDs
+	expReq.History = body.History
 	expReq.Provider = body.Provider
 	expReq.Model = body.Model
 
@@ -844,8 +879,41 @@ func (s *Server) handleExplainRepository(w http.ResponseWriter, r *http.Request)
 
 	svc := s.explanationService
 	if svc == nil {
-		composer := retrieval.NewDefaultEvidenceComposer(nil, nil, s.store)
-		svc = llm.NewGroundedExplanationService(nil, nil, composer, nil)
+		lexRetriever := retrieval.NewLexicalRetriever(s.store, s.wsMgr)
+		graphRetriever := retrieval.NewGraphRetriever(s.store)
+
+		var semRetriever retrieval.Retriever
+		if sqlStore, ok := s.store.(*storage.SQLiteStorage); ok && sqlStore != nil {
+			vStore, vErr := vector.NewSQLiteSemanticStore(sqlStore.DB())
+			if vErr == nil {
+				var embedProv vector.EmbeddingProvider
+				if s.cfg != nil && s.cfg.LLM.APIKey != "" {
+					embedProv = vector.NewGeminiEmbeddingProvider(s.cfg.LLM.APIKey, "")
+				} else {
+					embedProv = vector.NewMockEmbeddingProvider()
+				}
+				semRetriever = retrieval.NewSemanticRetriever(vStore, embedProv)
+			}
+		}
+
+		hybridEngine := retrieval.NewHybridRetrieverEngine(nil, lexRetriever, semRetriever, graphRetriever, retrieval.DefaultHybridRetrievalConfig())
+		hybridAdapter := retrieval.NewHybridRetrieverAdapter(hybridEngine)
+		composer := retrieval.NewDefaultEvidenceComposer(hybridAdapter, nil, s.store)
+
+		var provider llm.LLMProvider
+		if s.cfg != nil && s.cfg.LLM.Provider != "" {
+			llmCfg := llm.LLMConfig{
+				Provider: s.cfg.LLM.Provider,
+				Model:    s.cfg.LLM.Model,
+				APIKey:   s.cfg.LLM.APIKey,
+				Endpoint: s.cfg.LLM.Endpoint,
+			}
+			httpProv, err := llm.NewHTTPLLMProvider(llmCfg, nil)
+			if err == nil {
+				provider = httpProv
+			}
+		}
+		svc = llm.NewGroundedExplanationService(provider, nil, composer, nil)
 	}
 
 	resp, err := svc.ExplainRequest(r.Context(), expReq)
@@ -853,10 +921,21 @@ func (s *Server) handleExplainRepository(w http.ResponseWriter, r *http.Request)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
 		}
+		if errors.Is(err, llm.ErrProviderUnavailable) || errors.Is(err, llm.ErrProviderTimeout) {
+			log.Printf("[LLM] Gemini request failed: %v", err)
+			s.respondJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+				"error":         "Gemini could not be reached. CodeGraph could not generate an AI explanation.",
+				"provider_mode": "LLM_PROVIDER_ERROR",
+				"status":        "ERROR",
+				"details":       err.Error(),
+			})
+			return
+		}
 		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
+	log.Printf("[LLM] Gemini request succeeded (model: %s)", resp.Model)
 	s.respondJSON(w, http.StatusOK, resp)
 }
 

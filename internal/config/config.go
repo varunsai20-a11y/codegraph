@@ -1,10 +1,18 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 )
+
+type LLMProviderConfig struct {
+	Provider string
+	Model    string
+	APIKey   string
+	Endpoint string
+}
 
 type Config struct {
 	Port               int
@@ -14,9 +22,38 @@ type Config struct {
 	AllowedOrigins     []string
 	DefaultExclusions  []string
 	SupportedLanguages []string
+	LLM                LLMProviderConfig
+}
+
+func loadEnvFile(filename string) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if idx := strings.Index(line, "="); idx > 0 {
+			key := strings.TrimSpace(line[:idx])
+			val := strings.TrimSpace(line[idx+1:])
+			if (strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"")) || (strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'")) {
+				if len(val) >= 2 {
+					val = val[1 : len(val)-1]
+				}
+			}
+			if os.Getenv(key) == "" && val != "" {
+				os.Setenv(key, val)
+			}
+		}
+	}
 }
 
 func Load() *Config {
+	loadEnvFile(".env")
+
 	port := 8080
 	if p := os.Getenv("PORT"); p != "" {
 		if val, err := strconv.Atoi(p); err == nil {
@@ -55,6 +92,58 @@ func Load() *Config {
 		}
 	}
 
+	llmProv := strings.ToLower(os.Getenv("LLM_PROVIDER"))
+	llmModel := os.Getenv("LLM_MODEL")
+	llmKey := os.Getenv("LLM_API_KEY")
+	llmEnd := os.Getenv("LLM_ENDPOINT")
+
+	if llmProv == "" {
+		if os.Getenv("GEMINI_API_KEY") != "" {
+			llmProv = "gemini"
+			llmKey = os.Getenv("GEMINI_API_KEY")
+			if llmModel == "" {
+				llmModel = "gemini-2.5-flash"
+			}
+			if llmEnd == "" {
+				llmEnd = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", llmModel)
+			}
+		} else if os.Getenv("OPENAI_API_KEY") != "" {
+			llmProv = "openai"
+			llmKey = os.Getenv("OPENAI_API_KEY")
+			if llmModel == "" {
+				llmModel = "gpt-4o"
+			}
+			if llmEnd == "" {
+				llmEnd = "https://api.openai.com/v1/chat/completions"
+			}
+		} else if os.Getenv("ANTHROPIC_API_KEY") != "" {
+			llmProv = "anthropic"
+			llmKey = os.Getenv("ANTHROPIC_API_KEY")
+			if llmModel == "" {
+				llmModel = "claude-3-5-sonnet-20240620"
+			}
+			if llmEnd == "" {
+				llmEnd = "https://api.anthropic.com/v1/messages"
+			}
+		} else if os.Getenv("OLLAMA_BASE_URL") != "" {
+			llmProv = "ollama"
+			if llmModel == "" {
+				llmModel = "qwen2.5:3b"
+			}
+			llmEnd = strings.TrimSuffix(os.Getenv("OLLAMA_BASE_URL"), "/") + "/api/chat"
+		}
+	} else if llmProv == "gemini" {
+		if llmKey == "" {
+			llmKey = os.Getenv("GEMINI_API_KEY")
+		}
+		if llmModel == "" {
+			llmModel = "gemini-2.5-flash"
+		}
+		if llmEnd == "" {
+			llmEnd = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", llmModel)
+		}
+	}
+
 	return &Config{
 		Port:               port,
 		MaxFileSize:        maxFileSize,
@@ -63,5 +152,11 @@ func Load() *Config {
 		AllowedOrigins:     allowedOrigins,
 		DefaultExclusions:  []string{".git", "node_modules", "dist", "build", "coverage", ".cache", ".tmp", "vendor"},
 		SupportedLanguages: []string{"TypeScript", "JavaScript", "Python", "Go", "Java", "TSX", "JSX"},
+		LLM: LLMProviderConfig{
+			Provider: llmProv,
+			Model:    llmModel,
+			APIKey:   llmKey,
+			Endpoint: llmEnd,
+		},
 	}
 }

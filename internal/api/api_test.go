@@ -184,3 +184,112 @@ func TestConcurrentIndexJobCreation(t *testing.T) {
 		}
 	}
 }
+
+func TestExplainRepository_GroundingAndIsolation(t *testing.T) {
+	srv, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// 1. Create test repository
+	repo := &models.Repository{
+		ID:           "repo-ai-test",
+		Name:         "AI Test Repo",
+		SourceType:   models.SourceTypeGit,
+		SourceURL:    "https://github.com/test/ai-repo",
+		CanonicalURL: "https://github.com/test/ai-repo",
+		LocalPath:    "/tmp/ai-repo",
+		Status:       models.RepoStatusIndexed,
+	}
+	if err := srv.store.CreateRepository(ctx, repo); err != nil {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+
+	// 2. Insert test symbol into storage
+	sym := &models.Symbol{
+		ID:            "sym-server-init",
+		RepositoryID:  repo.ID,
+		FileID:        "file-main-go",
+		Name:          "InitializeServer",
+		QualifiedName: "main.InitializeServer",
+		Kind:          models.SymbolKindFunction,
+		RelativePath:  "cmd/server/main.go",
+		Location:      models.Location{StartLine: 10, EndLine: 25},
+	}
+	if err := srv.store.SaveSymbols(ctx, repo.ID, []*models.Symbol{sym}); err != nil {
+		t.Fatalf("failed to insert symbols: %v", err)
+	}
+
+	manifestItem := &models.FileManifestItem{
+		ID:           "file-main-go",
+		RepositoryID: repo.ID,
+		RelativePath: "cmd/server/main.go",
+		Language:     "GO",
+		Status:       models.FileStatusIndexed,
+	}
+	if err := srv.store.SaveManifestItems(ctx, repo.ID, []*models.FileManifestItem{manifestItem}); err != nil {
+		t.Fatalf("failed to insert manifest: %v", err)
+	}
+
+	// Test A: Relevant Query for indexed symbol
+	queryPayload := map[string]string{
+		"query": "How does InitializeServer work?",
+	}
+	bodyBytes, _ := json.Marshal(queryPayload)
+	req := httptest.NewRequest("POST", fmt.Sprintf("/api/repositories/%s/explain", repo.ID), bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200 for relevant query, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp models.ExplanationResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal explanation response: %v", err)
+	}
+
+	if resp.IsInsufficientEvidence {
+		t.Errorf("expected relevant query to have sufficient evidence, got insufficient")
+	}
+	if len(resp.Evidence) == 0 {
+		t.Errorf("expected evidence candidates for relevant query, got 0")
+	}
+	if resp.Grounding.EvidenceCount == 0 {
+		t.Errorf("expected positive evidence count in grounding details")
+	}
+
+	// Test B: Irrelevant Query returning INSUFFICIENT_EVIDENCE
+	irrelevantPayload := map[string]string{
+		"query": "recipe for chocolate cake with frosting",
+	}
+	irrBytes, _ := json.Marshal(irrelevantPayload)
+	irrReq := httptest.NewRequest("POST", fmt.Sprintf("/api/repositories/%s/explain", repo.ID), bytes.NewReader(irrBytes))
+	irrReq.Header.Set("Content-Type", "application/json")
+	irrW := httptest.NewRecorder()
+	srv.router.ServeHTTP(irrW, irrReq)
+
+	if irrW.Code != http.StatusOK {
+		t.Fatalf("expected status 200 for irrelevant query, got %d: %s", irrW.Code, irrW.Body.String())
+	}
+
+	var irrResp models.ExplanationResponse
+	if err := json.Unmarshal(irrW.Body.Bytes(), &irrResp); err != nil {
+		t.Fatalf("failed to unmarshal irrelevant response: %v", err)
+	}
+
+	if !irrResp.IsInsufficientEvidence {
+		t.Errorf("expected irrelevant query to return IsInsufficientEvidence = true")
+	}
+
+	// Test C: Non-existent Repository
+	badRepoReq := httptest.NewRequest("POST", "/api/repositories/non-existent-repo-id/explain", bytes.NewReader(bodyBytes))
+	badRepoReq.Header.Set("Content-Type", "application/json")
+	badW := httptest.NewRecorder()
+	srv.router.ServeHTTP(badW, badRepoReq)
+
+	if badW.Code != http.StatusNotFound {
+		t.Errorf("expected status 404 for non-existent repository, got %d", badW.Code)
+	}
+}

@@ -104,7 +104,7 @@ func (s *EvaluationSuite) Run(ctx context.Context, repoPath string, outDir strin
 	}
 
 	classifier := retrieval.NewRuleBasedIntentClassifier()
-	lexical := retrieval.NewLexicalRetriever(store)
+	lexical := retrieval.NewLexicalRetriever(store, nil)
 	semantic := retrieval.NewSemanticRetriever(vecStore, mockProvider)
 	graphRet := retrieval.NewGraphRetriever(store)
 	hybridCfg := retrieval.DefaultHybridRetrievalConfig()

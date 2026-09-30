@@ -146,13 +146,26 @@ export const GraphExplorer: React.FC = () => {
           )}
 
           {/* Floating Graph Stats Overlay */}
-          <div className="absolute bottom-3 left-3 bg-surface/90 border border-border backdrop-blur-md px-3 py-1.5 rounded-md text-[11px] text-gray-300 flex items-center space-x-3 pointer-events-none select-none">
+          <div className="absolute bottom-3 left-3 bg-surface/90 border border-border backdrop-blur-md px-3.5 py-1.5 rounded-md text-[11px] font-mono text-gray-300 flex items-center space-x-3 pointer-events-none select-none">
             <span>
-              Visible Nodes: <strong className="text-white">{visibleNodes.length}</strong>
+              Nodes shown: <strong className="text-cyan-300 font-bold">{visibleNodes.length}</strong>
             </span>
+            <span className="text-gray-600">|</span>
             <span>
-              Visible Edges: <strong className="text-white">{visibleEdges.length}</strong>
+              Edges shown: <strong className="text-cyan-300 font-bold">{visibleEdges.length}</strong>
             </span>
+            <span className="text-gray-600">|</span>
+            <span>
+              Total in graph: <strong className="text-white font-bold">{graphNodes.length}</strong>
+            </span>
+            {graphNodes.length >= graphNodeLimit && (
+              <>
+                <span className="text-gray-600">|</span>
+                <span className="text-amber-400 font-bold">
+                  (Showing {visibleNodes.length} of {graphNodes.length} nodes — Max limit {graphNodeLimit})
+                </span>
+              </>
+            )}
           </div>
         </div>
 

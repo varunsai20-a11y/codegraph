@@ -154,7 +154,7 @@ func BenchmarkHybridRetriever_ExecutionBreakdown(b *testing.B) {
 	}
 	_ = store.SaveGraph(context.Background(), "repo-hybrid", []*models.Node{node1, node2}, []*models.Edge{edge})
 
-	lexicalRetriever := retrieval.NewLexicalRetriever(store)
+	lexicalRetriever := retrieval.NewLexicalRetriever(store, nil)
 	semanticRetriever := retrieval.NewSemanticRetriever(vecStore, provider)
 	graphRetriever := retrieval.NewGraphRetriever(store)
 	classifier := retrieval.NewRuleBasedIntentClassifier()

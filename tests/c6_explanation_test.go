@@ -349,7 +349,7 @@ func TestC6_13_ProviderFailureIsolation(t *testing.T) {
 	composer := retrieval.NewDefaultEvidenceComposer(&dummyRetriever{items: []*models.EvidenceItem{item}}, nil, nil)
 	svc := llm.NewGroundedExplanationService(failingProv, nil, composer, nil)
 
-	req, _ := models.NewExplanationRequest(scope, "Query?")
+	req, _ := models.NewExplanationRequest(scope, "Process query")
 	_, err := svc.ExplainRequest(context.Background(), req)
 	if err == nil {
 		t.Fatalf("expected error when LLM provider fails, got nil")

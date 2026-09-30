@@ -287,3 +287,30 @@ func (e *HybridRetrieverEngine) Retrieve(
 		Items:           finalItems,
 	}, nil
 }
+
+// HybridRetrieverAdapter adapts HybridRetrieverEngine to the standard Retriever interface.
+type HybridRetrieverAdapter struct {
+	engine *HybridRetrieverEngine
+}
+
+func NewHybridRetrieverAdapter(engine *HybridRetrieverEngine) *HybridRetrieverAdapter {
+	return &HybridRetrieverAdapter{engine: engine}
+}
+
+func (a *HybridRetrieverAdapter) Retrieve(
+	ctx context.Context,
+	scope models.RepositoryScope,
+	query string,
+	intent string,
+	limit int,
+) ([]*models.EvidenceItem, error) {
+	res, err := a.engine.Retrieve(ctx, scope, query)
+	if err != nil {
+		return nil, err
+	}
+	items := res.Items
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}

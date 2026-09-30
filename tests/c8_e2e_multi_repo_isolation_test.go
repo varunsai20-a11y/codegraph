@@ -121,7 +121,7 @@ func TestE2E_MultiRepositoryIsolationWorkflow(t *testing.T) {
 
 	// 3. Verify Grounded Explanation Isolation for Repo A
 	mockProv := llm.NewMockLLMProvider("SharedName function in Repo A [E1].", nil)
-	lexRetriever := retrieval.NewLexicalRetriever(store)
+	lexRetriever := retrieval.NewLexicalRetriever(store, nil)
 	composer := retrieval.NewDefaultEvidenceComposer(lexRetriever, nil, store)
 	expSvc := llm.NewGroundedExplanationService(mockProv, nil, composer, nil)
 	server.SetExplanationService(expSvc)

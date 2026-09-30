@@ -3,7 +3,10 @@ package retrieval
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"codegraph/internal/models"
 	"codegraph/internal/storage"
@@ -42,6 +45,15 @@ func (c *DefaultEvidenceComposer) Compose(ctx context.Context, req *models.Expla
 
 	scope := req.RepositoryScope
 	var candidates []*models.EvidenceItem
+
+	classifier := NewRuleBasedIntentClassifier()
+	intent := classifier.Classify(req.Question)
+	lowerQ := strings.ToLower(req.Question)
+
+	if intent == IntentRepoOverview || intent == IntentArchitectureQuery || intent == IntentTrace || isStartupQuery(lowerQ) || isExecutionFlowQuery(lowerQ) || req.Question == "explain the code" {
+		overviewItems := c.assembleSystemContextPackage(ctx, scope)
+		candidates = append(candidates, overviewItems...)
+	}
 
 	// 1. Convert C5 Static Flow context into high-priority evidence items
 	if req.StaticFlow != nil && req.StaticFlow.Path != nil {
@@ -88,6 +100,136 @@ func (c *DefaultEvidenceComposer) Compose(ctx context.Context, req *models.Expla
 	}
 
 	return pkg, nil
+}
+
+func (c *DefaultEvidenceComposer) assembleSystemContextPackage(ctx context.Context, scope models.RepositoryScope) []*models.EvidenceItem {
+	if c.store == nil {
+		return nil
+	}
+
+	manifest, err := c.store.GetManifestForRepository(ctx, scope.RepositoryID)
+	if err != nil || len(manifest) == 0 {
+		return nil
+	}
+
+	repoLocalPath := ""
+	func() {
+		defer func() { _ = recover() }()
+		if repo, err := c.store.GetRepository(ctx, scope.RepositoryID); err == nil && repo != nil {
+			repoLocalPath = repo.LocalPath
+		}
+	}()
+
+	var items []*models.EvidenceItem
+	var dirList []string
+	seenDirs := make(map[string]bool)
+
+	for _, item := range manifest {
+		relPath := item.RelativePath
+		lowerPath := strings.ToLower(relPath)
+
+		parts := strings.Split(relPath, "/")
+		if len(parts) > 1 {
+			topDir := parts[0]
+			if !seenDirs[topDir] {
+				seenDirs[topDir] = true
+				dirList = append(dirList, topDir+"/")
+			}
+		}
+
+		// 1. README.md
+		if lowerPath == "readme.md" || strings.HasSuffix(lowerPath, "/readme.md") {
+			content := readEvidenceFileSnippet(repoLocalPath, item.RelativePath, 4096)
+			if content == "" {
+				content = fmt.Sprintf("README Documentation in %s", item.RelativePath)
+			}
+			evItem := &models.EvidenceItem{
+				RepositoryID:  scope.RepositoryID,
+				Type:          models.EvidenceTypeDocumentation,
+				FileID:        item.ID,
+				RelativePath:  item.RelativePath,
+				Content:       content,
+				RetrieverType: "SYSTEM_CONTEXT_README",
+				RRFScore:      120.0,
+				Rank:          1,
+			}
+			evItem.StableID = evItem.ComputeStableID()
+			items = append(items, evItem)
+		}
+
+		// 2. Setup/Dependency files
+		if lowerPath == "requirements.txt" || lowerPath == "package.json" || lowerPath == "go.mod" || lowerPath == "pom.xml" || lowerPath == "cargo.toml" || lowerPath == "pyproject.toml" {
+			content := readEvidenceFileSnippet(repoLocalPath, item.RelativePath, 2048)
+			if content == "" {
+				content = fmt.Sprintf("Dependency / Environment setup file: %s", item.RelativePath)
+			}
+			evItem := &models.EvidenceItem{
+				RepositoryID:  scope.RepositoryID,
+				Type:          models.EvidenceTypeCodeSnippet,
+				FileID:        item.ID,
+				RelativePath:  item.RelativePath,
+				Content:       content,
+				RetrieverType: "SYSTEM_CONTEXT_SETUP",
+				RRFScore:      115.0,
+				Rank:          2,
+			}
+			evItem.StableID = evItem.ComputeStableID()
+			items = append(items, evItem)
+		}
+
+		// 3. Entrypoint files
+		if lowerPath == "run.py" || lowerPath == "main.py" || lowerPath == "app.py" || lowerPath == "main.go" || lowerPath == "index.ts" || lowerPath == "server.js" || lowerPath == "index.js" || strings.HasPrefix(lowerPath, "cmd/") {
+			content := readEvidenceFileSnippet(repoLocalPath, item.RelativePath, 2048)
+			if content == "" {
+				content = fmt.Sprintf("Primary application entrypoint component: %s", item.RelativePath)
+			}
+			evItem := &models.EvidenceItem{
+				RepositoryID:  scope.RepositoryID,
+				Type:          models.EvidenceTypeCodeSnippet,
+				FileID:        item.ID,
+				RelativePath:  item.RelativePath,
+				Content:       content,
+				RetrieverType: "SYSTEM_CONTEXT_ENTRYPOINT",
+				RRFScore:      110.0,
+				Rank:          3,
+			}
+			evItem.StableID = evItem.ComputeStableID()
+			items = append(items, evItem)
+		}
+	}
+
+	// 4. Top-level Directory Tree summary item
+	if len(dirList) > 0 {
+		treeContent := fmt.Sprintf("Top-level Repository Directory Tree: %s", strings.Join(dirList, ", "))
+		treeItem := &models.EvidenceItem{
+			RepositoryID:  scope.RepositoryID,
+			Type:          models.EvidenceTypeDocumentation,
+			RelativePath:  "workspace_tree",
+			Content:       treeContent,
+			RetrieverType: "SYSTEM_CONTEXT_TREE",
+			RRFScore:      105.0,
+			Rank:          4,
+		}
+		treeItem.StableID = treeItem.ComputeStableID()
+		items = append(items, treeItem)
+	}
+
+	return items
+}
+
+func readEvidenceFileSnippet(repoLocalPath, relPath string, maxBytes int) string {
+	if repoLocalPath == "" || relPath == "" {
+		return ""
+	}
+	fullPath := filepath.Join(repoLocalPath, filepath.FromSlash(relPath))
+	data, err := os.ReadFile(fullPath)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	if len(data) > maxBytes {
+		data = data[:maxBytes]
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func (c *DefaultEvidenceComposer) convertStaticFlowToEvidence(scope models.RepositoryScope, flow *models.StaticFlowResult) []*models.EvidenceItem {

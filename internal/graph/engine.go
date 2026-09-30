@@ -163,6 +163,18 @@ func (e *Engine) GetDependents(fileID string) []*models.Node {
 	return dependents
 }
 
+// GetNodeEdges returns all incoming and outgoing edges for the specified node ID.
+func (e *Engine) GetNodeEdges(nodeID string) (incoming []*models.Edge, outgoing []*models.Edge) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	resolvedID, _, found := e.resolveNodeID(models.NodeKindSymbol, nodeID)
+	if !found {
+		resolvedID = nodeID
+	}
+	return e.incomingEdges[resolvedID], e.outgoingEdges[resolvedID]
+}
+
 // GetTransitiveDependents calculates impact analysis: all files that depend on target fileID (reverse incoming EDGE_IMPORTS).
 func (e *Engine) GetTransitiveDependents(fileID string) *models.ImpactAnalysisResult {
 	e.mu.RLock()

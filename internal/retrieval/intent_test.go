@@ -80,9 +80,39 @@ func TestRuleBasedIntentClassifier_PrecedenceAndAmbiguousQueries(t *testing.T) {
 			expected: retrieval.IntentFeatureSearch,
 		},
 		{
-			name:     "Empty Query Fallback",
-			query:    "   ",
-			expected: retrieval.IntentGeneralRepositoryQuery,
+			name:     "Startup Query 1",
+			query:    "What happens when the application starts?",
+			expected: retrieval.IntentRepoOverview,
+		},
+		{
+			name:     "Startup Query 2",
+			query:    "How does this program start?",
+			expected: retrieval.IntentRepoOverview,
+		},
+		{
+			name:     "Startup Query 3",
+			query:    "Walk me through startup.",
+			expected: retrieval.IntentTrace,
+		},
+		{
+			name:     "Startup Query 4",
+			query:    "Where does execution begin?",
+			expected: retrieval.IntentTrace,
+		},
+		{
+			name:     "Startup Query 5",
+			query:    "What happens after I run this?",
+			expected: retrieval.IntentRepoOverview,
+		},
+		{
+			name:     "Startup Query 6",
+			query:    "Show me the execution flow.",
+			expected: retrieval.IntentTrace,
+		},
+		{
+			name:     "Startup Query 7",
+			query:    "How does the application initialize?",
+			expected: retrieval.IntentRepoOverview,
 		},
 	}
 

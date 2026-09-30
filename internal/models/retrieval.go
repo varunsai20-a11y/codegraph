@@ -43,6 +43,7 @@ const (
 	EvidenceTypeSymbol      EvidenceType = "EVIDENCE_SYMBOL"
 	EvidenceTypeGraphEdge   EvidenceType = "EVIDENCE_GRAPH_EDGE"
 	EvidenceTypeCodeSnippet EvidenceType = "EVIDENCE_CODE_SNIPPET"
+	EvidenceTypeDocumentation EvidenceType = "EVIDENCE_DOCUMENTATION"
 	EvidenceTypeDependency  EvidenceType = "EVIDENCE_DEPENDENCY"
 	EvidenceTypeStaticFlow  EvidenceType = "EVIDENCE_STATIC_FLOW"
 )

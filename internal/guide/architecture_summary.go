@@ -29,6 +29,20 @@ func NewDefaultArchitectureSummaryGenerator(store storage.Storage, engine *graph
 	}
 }
 
+func isNonArchitecturalDir(dir string) bool {
+	dirLower := strings.ToLower(filepath.ToSlash(dir))
+	parts := strings.Split(dirLower, "/")
+	for _, p := range parts {
+		if strings.HasPrefix(p, ".github") || strings.HasPrefix(p, ".git") ||
+			p == "output" || p == "dist" || p == "build" || p == "vendor" ||
+			p == "node_modules" || p == "coverage" || p == ".tmp" || p == "cache" ||
+			p == "tmp" || strings.HasPrefix(p, "generated") {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *DefaultArchitectureSummaryGenerator) GenerateSummary(ctx context.Context, scope models.RepositoryScope) (models.ArchitectureSummary, error) {
 	if scope.RepositoryID == "" {
 		return models.ArchitectureSummary{}, models.ErrInvalidRepositoryScope
@@ -139,11 +153,7 @@ func (g *DefaultArchitectureSummaryGenerator) GenerateSummary(ctx context.Contex
 
 	var majorMods []models.ModuleSummary
 	for _, m := range summary.TopModules {
-		dirLower := strings.ToLower(m.Directory)
-		if strings.HasPrefix(dirLower, ".github") || strings.HasPrefix(dirLower, ".git") ||
-			strings.HasPrefix(dirLower, "output") || strings.HasPrefix(dirLower, "dist") ||
-			strings.HasPrefix(dirLower, "build") || strings.HasPrefix(dirLower, "vendor") ||
-			strings.HasPrefix(dirLower, "node_modules") {
+		if isNonArchitecturalDir(m.Directory) {
 			continue
 		}
 		majorMods = append(majorMods, models.ModuleSummary{
@@ -178,7 +188,7 @@ func (g *DefaultArchitectureSummaryGenerator) GenerateSummary(ctx context.Contex
 		if relPathLower == "run.py" || relPathLower == "main.py" || relPathLower == "app.py" || relPathLower == "main.go" || strings.HasPrefix(relPathLower, "cmd/") {
 			score += 50
 		}
-		if strings.HasPrefix(relPathLower, "scripts/") || strings.HasPrefix(relPathLower, "output/") || strings.HasPrefix(relPathLower, "test") {
+		if isNonArchitecturalDir(relPathLower) || strings.HasPrefix(relPathLower, "test") {
 			score -= 40
 		}
 
@@ -187,8 +197,6 @@ func (g *DefaultArchitectureSummaryGenerator) GenerateSummary(ctx context.Contex
 			score += 40
 		} else if nameLower == "run" || nameLower == "start" || nameLower == "execute" {
 			score += 20
-		} else if nameLower == "check_ollama_server" {
-			score += 5
 		} else if strings.Contains(nameLower, "handler") || strings.Contains(nameLower, "server") {
 			score += 10
 		}
@@ -241,37 +249,34 @@ func (g *DefaultArchitectureSummaryGenerator) GenerateSummary(ctx context.Contex
 
 	// 3. Identify High-Connectivity Architectural Symbols & External Boundaries (Multi-Signal Scoring)
 	if g.engine != nil {
-		nodes, edges := g.engine.GetOverviewGraph(graph.QueryParams{
-			MaxHops:   1,
-			NodeLimit: 100,
-			EdgeLimit: 200,
-		})
+		allNodes := g.engine.GetAllNodes()
 
-		degreeMap := make(map[string]int)
-		nodeMap := make(map[string]*models.Node)
 		extBoundaries := make(map[string]bool)
 
-		for _, n := range nodes {
+		for _, n := range allNodes {
 			if n == nil {
 				continue
 			}
-			nodeMap[n.ID] = n
-			if n.Kind == models.NodeKindExternalModule && n.Label != "" && n.Label != "<unknown>" && n.Label != "unresolved" {
-				extBoundaries[n.Label] = true
+			if n.Kind == models.NodeKindExternalModule {
+				lbl := cleanExternalBoundary(n.Label)
+				if lbl != "" {
+					extBoundaries[lbl] = true
+				}
 			}
 		}
 
-		for _, e := range edges {
-			if e == nil {
-				continue
+		for _, rel := range rels {
+			if rel != nil && rel.TargetKind == models.TargetKindExternal {
+				lbl := cleanExternalBoundary(rel.TargetID)
+				if lbl != "" {
+					extBoundaries[lbl] = true
+				}
 			}
-			degreeMap[e.SourceID]++
-			degreeMap[e.TargetID]++
 		}
 
 		// Top modules map for module importance signal
 		topModuleMap := make(map[string]bool)
-		for _, tm := range summary.TopModules {
+		for _, tm := range summary.MajorModules {
 			topModuleMap[tm.Directory] = true
 		}
 
@@ -279,6 +284,7 @@ func (g *DefaultArchitectureSummaryGenerator) GenerateSummary(ctx context.Contex
 		for _, ep := range entryCandidates {
 			if ep != nil {
 				entrypointIDs[ep.ID] = true
+				entrypointIDs[graph.FormatNodeID(models.NodeKindSymbol, scope.RepositoryID, ep.ID)] = true
 			}
 		}
 
@@ -287,89 +293,175 @@ func (g *DefaultArchitectureSummaryGenerator) GenerateSummary(ctx context.Contex
 			score float64
 		}
 		var pairs []degreePair
-		for id, n := range nodeMap {
-			if n.Kind == models.NodeKindSymbol {
-				deg := degreeMap[id]
-				score := float64(deg) * 8.0
-				lbl := strings.ToLower(n.Label)
-				relPathLower := strings.ToLower(n.RelativePath)
-
-				// Incoming / Outgoing Call counts
-				callers := g.engine.GetCallers(id)
-				callees := g.engine.GetCallees(id)
-				inCalls := len(callers)
-				outCalls := len(callees)
-
-				score += float64(inCalls) * 12.0
-				score += float64(outCalls) * 10.0
-
-				// Symbol Kind & Structural Role weighting
-				idLower := strings.ToLower(n.ID)
-				if strings.Contains(idLower, "class") || strings.Contains(idLower, "struct") || strings.Contains(idLower, "interface") {
-					score += 40.0
-				} else if strings.Contains(idLower, "func") || strings.Contains(idLower, "method") {
-					score += 25.0
-				} else if inCalls > 0 || outCalls > 0 {
-					// Instantiated component (e.g. research_crew = Crew(...)) with graph call edges
-					score += 45.0
-				} else {
-					// Unconnected primitive constants get heavy penalty
-					score -= 100.0
-				}
-
-				// Public / API-facing status signal (exported symbol or top-level method)
-				if len(n.Label) > 0 && n.Label[0] >= 'A' && n.Label[0] <= 'Z' {
-					score += 20.0
-				}
-
-				// Module importance signal (belongs to one of top directory modules)
-				dir := filepath.Dir(filepath.ToSlash(n.RelativePath))
-				if dir == "." || dir == "" {
-					dir = "root"
-				} else {
-					parts := strings.Split(dir, "/")
-					if len(parts) > 2 {
-						dir = parts[0] + "/" + parts[1]
-					}
-				}
-				if topModuleMap[dir] {
-					score += 35.0
-				}
-
-				// Entrypoint proximity signal
-				for _, c := range callers {
-					if c != nil && c.CallerNode != nil && entrypointIDs[c.CallerNode.ID] {
-						score += 60.0
-						break
-					}
-				}
-				for _, c := range callees {
-					if c != nil && c.CalleeNode != nil && entrypointIDs[c.CalleeNode.ID] {
-						score += 35.0
-						break
-					}
-				}
-
-				// Structural & Architectural domain terms bonus
-				archTerms := []string{
-					"crew", "task", "agent", "tool", "handler", "runner", "orchestrat",
-					"service", "main", "engine", "pipeline", "controller", "manager",
-					"processor", "workflow", "client", "server", "router", "api", "node",
-				}
-				for _, term := range archTerms {
-					if strings.Contains(lbl, term) {
-						score += 25.0
-						break
-					}
-				}
-
-				// Penalty for test, mock, or internal utility files
-				if strings.Contains(relPathLower, "test") || strings.Contains(relPathLower, "mock") || strings.Contains(lbl, "test") {
-					score -= 100.0
-				}
-
-				pairs = append(pairs, degreePair{node: n, score: score})
+		for _, n := range allNodes {
+			if n == nil || n.Kind != models.NodeKindSymbol {
+				continue
 			}
+			id := n.ID
+			lbl := strings.ToLower(n.Label)
+			relPathLower := strings.ToLower(n.RelativePath)
+
+			callers := g.engine.GetCallers(id)
+			callees := g.engine.GetCallees(id)
+
+			// Filter callers and callees to internal repository symbols
+			var internalCallers []*models.CallSite
+			for _, c := range callers {
+				if c != nil && c.CallerNode != nil && c.CallerNode.Kind == models.NodeKindSymbol && c.CallerNode.RelativePath != "" {
+					internalCallers = append(internalCallers, c)
+				}
+			}
+			var internalCallees []*models.CallSite
+			for _, c := range callees {
+				if c != nil && c.CalleeNode != nil && c.CalleeNode.Kind == models.NodeKindSymbol && c.CalleeNode.RelativePath != "" {
+					internalCallees = append(internalCallees, c)
+				}
+			}
+
+			symbolInCalls := len(internalCallers)
+			symbolOutCalls := len(internalCallees)
+
+			deg := symbolInCalls + symbolOutCalls
+			if deg == 0 {
+				continue
+			}
+
+			// Cross-file orchestrator signal (caller or callee in a different internal repository file)
+			hasCrossFileCaller := false
+			hasCrossFileCallee := false
+			crossFileCallersCount := 0
+			crossFileCalleesCount := 0
+
+			for _, c := range internalCallers {
+				if c.CallerNode.RelativePath != n.RelativePath {
+					hasCrossFileCaller = true
+					crossFileCallersCount++
+				}
+			}
+			for _, c := range internalCallees {
+				if c.CalleeNode.RelativePath != n.RelativePath {
+					hasCrossFileCallee = true
+					crossFileCalleesCount++
+				}
+			}
+			hasCrossFileRel := hasCrossFileCaller || hasCrossFileCallee
+			numCrossFiles := crossFileCallersCount + crossFileCalleesCount
+
+			score := float64(deg) * 20.0
+			score += float64(symbolInCalls) * 25.0
+			score += float64(symbolOutCalls) * 20.0
+			score += float64(numCrossFiles) * 50.0
+
+			if hasCrossFileRel {
+				score += 200.0
+			} else {
+				// Purely single-file local helper penalty
+				score -= 200.0
+			}
+
+			// Entrypoint cross-file delegation signal:
+			// Called by an entrypoint symbol from a different file (e.g., main in run.py calling research_crew in crew.py)
+			entrypointCrossFileCaller := false
+			for _, c := range internalCallers {
+				if c.CallerNode != nil && entrypointIDs[c.CallerNode.ID] && c.CallerNode.RelativePath != n.RelativePath {
+					entrypointCrossFileCaller = true
+					break
+				}
+			}
+			if entrypointCrossFileCaller {
+				score += 300.0
+			}
+
+			// Entrypoint same-file helper demotion:
+			// Defined inside an entrypoint file, not an entrypoint candidate itself, and lacks external cross-file callers
+			isEntryFile := false
+			for _, ep := range entryCandidates {
+				if ep != nil && ep.RelativePath == n.RelativePath {
+					isEntryFile = true
+					break
+				}
+			}
+			isEntryCandidateSym := entrypointIDs[n.ID]
+			if isEntryFile && !isEntryCandidateSym && !hasCrossFileCaller {
+				score -= 250.0
+			}
+
+			// Generic helper / utility function name demotion
+			if strings.HasPrefix(lbl, "check_") || strings.HasPrefix(lbl, "is_") ||
+				strings.HasPrefix(lbl, "validate_") || strings.HasPrefix(lbl, "setup_") ||
+				strings.HasPrefix(lbl, "verify_") || strings.HasPrefix(lbl, "ensure_") ||
+				strings.HasPrefix(lbl, "parse_") || strings.HasPrefix(lbl, "init_") ||
+				strings.HasPrefix(lbl, "load_") || strings.HasPrefix(lbl, "print_") ||
+				strings.HasPrefix(lbl, "log_") || strings.Contains(lbl, "helper") ||
+				strings.Contains(lbl, "util") {
+				score -= 200.0
+			}
+
+			// Symbol Kind & Structural Role weighting
+			idLower := strings.ToLower(n.ID)
+			if strings.Contains(idLower, "class") || strings.Contains(idLower, "struct") || strings.Contains(idLower, "interface") {
+				score += 80.0
+			} else if strings.Contains(idLower, "func") || strings.Contains(idLower, "method") {
+				score += 40.0
+			} else if hasCrossFileRel {
+				// Instantiated component (e.g. research_crew = Crew(...)) with cross-file graph call edges
+				score += 100.0
+			} else {
+				score -= 30.0
+			}
+
+			// Public / API-facing status signal (exported symbol or top-level method)
+			if len(n.Label) > 0 && n.Label[0] >= 'A' && n.Label[0] <= 'Z' {
+				score += 20.0
+			}
+
+			// Module importance signal (belongs to one of major directory modules)
+			dir := filepath.Dir(filepath.ToSlash(n.RelativePath))
+			if dir == "." || dir == "" {
+				dir = "root"
+			} else {
+				parts := strings.Split(dir, "/")
+				if len(parts) > 2 {
+					dir = parts[0] + "/" + parts[1]
+				}
+			}
+			if topModuleMap[dir] {
+				score += 40.0
+			}
+
+			// Entrypoint proximity signal
+			for _, c := range callers {
+				if c != nil && c.CallerNode != nil && entrypointIDs[c.CallerNode.ID] {
+					score += 50.0
+					break
+				}
+			}
+			for _, c := range callees {
+				if c != nil && c.CalleeNode != nil && entrypointIDs[c.CalleeNode.ID] {
+					score += 35.0
+					break
+				}
+			}
+
+			// Structural & Architectural domain terms bonus
+			archTerms := []string{
+				"crew", "task", "agent", "tool", "handler", "runner", "orchestrat",
+				"service", "main", "engine", "pipeline", "controller", "manager",
+				"processor", "workflow", "client", "server", "router", "api", "node",
+			}
+			for _, term := range archTerms {
+				if strings.Contains(lbl, term) {
+					score += 50.0
+					break
+				}
+			}
+
+			// Penalty for test, mock, or internal utility files
+			if strings.Contains(relPathLower, "test") || strings.Contains(relPathLower, "mock") || strings.Contains(lbl, "test") {
+				score -= 200.0
+			}
+
+			pairs = append(pairs, degreePair{node: n, score: score})
 		}
 
 		sort.Slice(pairs, func(i, j int) bool {
@@ -406,16 +498,54 @@ func (g *DefaultArchitectureSummaryGenerator) GenerateSummary(ctx context.Contex
 	if len(summary.EntryPointCandidatesStr) > 0 {
 		mainEP = summary.EntryPointCandidatesStr[0]
 	}
+	extBoundaryStr := "none confidently identified"
+	if len(summary.ExternalBoundaries) > 0 {
+		extBoundaryStr = strings.Join(summary.ExternalBoundaries, ", ")
+	}
+	activeModules := summary.MajorModules
+	if len(activeModules) == 0 {
+		activeModules = summary.TopModules
+	}
+	majorModDirs := make([]string, 0, len(activeModules))
+	for _, m := range activeModules {
+		majorModDirs = append(majorModDirs, m.Directory)
+	}
+	majorModSummaryStr := strings.Join(majorModDirs, ", ")
+
 	summary.Overview = fmt.Sprintf(
-		"Repository Scope '%s': %d source files, %d symbols, and %d graph relationships across %d primary directory modules. Execution entrypoint: '%s'. External boundaries: %s.",
+		"Repository Scope '%s': %d source files, %d symbols, and %d graph relationships across %d primary architectural modules [%s] (%d repository directories detected). Execution entrypoint: '%s'. External boundaries: %s.",
 		scope.RepositoryID,
 		summary.TotalFiles,
 		summary.TotalSymbols,
 		summary.TotalRelationships,
+		len(activeModules),
+		majorModSummaryStr,
 		len(summary.TopModules),
 		mainEP,
-		strings.Join(summary.ExternalBoundaries, ", "),
+		extBoundaryStr,
 	)
 
 	return summary, nil
+}
+
+func cleanExternalBoundary(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.Trim(s, "\"`'")
+	if s == "" || s == "." || s == ".." || s == "<unknown>" || s == "unresolved" || s == "none" || s == "*" {
+		return ""
+	}
+	if strings.HasPrefix(s, ".") || strings.HasPrefix(s, "/") || strings.HasPrefix(s, "\\") {
+		return ""
+	}
+	if idx := strings.Index(s, ":"); idx > 0 {
+		s = s[:idx]
+	}
+	if idx := strings.Index(s, " as "); idx > 0 {
+		s = s[:idx]
+	}
+	s = strings.TrimSpace(s)
+	if s == "" || s == "." || s == ".." {
+		return ""
+	}
+	return s
 }

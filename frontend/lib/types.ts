@@ -130,6 +130,7 @@ export interface GraphQueryParams {
   target?: string;
   depth?: number;
   node_limit?: number;
+  limit?: number;
   edge_limit?: number;
   node_types?: string;
   edge_types?: string;
@@ -250,6 +251,7 @@ export interface ExplanationResponse {
   grounding: GroundingMetadata;
   provider?: string;
   model?: string;
+  provider_mode?: string;
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
@@ -325,4 +327,50 @@ export interface InvestigationRequest {
   selected_symbol?: string;
   investigation_state?: Investigation;
   requested_action?: string;
+}
+
+export type ModuleCategory = "ENTRYPOINT" | "SERVICE" | "STORAGE" | "EXTERNAL";
+
+export interface ArchitectureModule {
+  id: string;
+  name: string;
+  path: string;
+  category: ModuleCategory;
+  file_count: number;
+  symbol_count: number;
+  node_ids: string[];
+}
+
+export interface ArchitectureEdge {
+  id: string;
+  source_module: string;
+  target_module: string;
+  interaction_count: number;
+  kinds: string[];
+  label: string;
+}
+
+export interface ArchitectureDiagram {
+  repository_id: string;
+  modules: ArchitectureModule[];
+  edges: ArchitectureEdge[];
+  mermaid_code: string;
+  total_modules: number;
+  total_edges: number;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatThreadItem {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  citations?: Citation[];
+  evidence?: ExplanationEvidence[];
+  isInsufficient?: boolean;
+  providerMode?: string;
+  timestamp: string;
 }

@@ -456,3 +456,53 @@ Malformed citations are [E-1] and [Evidence1].`
 		t.Errorf("expected 2 malformed citations ([E-1], [Evidence1]), got %v", report.MalformedCitations)
 	}
 }
+
+func TestExplanationService_ExplainRequest_GreetingAndRepoOverview(t *testing.T) {
+	scope, err := models.NewRepositoryScope("repo-conversational")
+	if err != nil {
+		t.Fatalf("failed to create scope: %v", err)
+	}
+
+	reqGreeting, err := models.NewExplanationRequest(scope, "hi")
+	if err != nil {
+		t.Fatalf("failed to create greeting request: %v", err)
+	}
+
+	svc := llm.NewGroundedExplanationService(nil, nil, nil, nil)
+
+	respGreeting, err := svc.ExplainRequest(context.Background(), reqGreeting)
+	if err != nil {
+		t.Fatalf("ExplainRequest failed for greeting: %v", err)
+	}
+	if respGreeting.Status != models.ExplanationStatusSuccess {
+		t.Errorf("expected ExplanationStatusSuccess, got %s", respGreeting.Status)
+	}
+	if respGreeting.Sufficiency.Status != models.SufficiencySufficient {
+		t.Errorf("expected SufficiencySufficient, got %s", respGreeting.Sufficiency.Status)
+	}
+	if respGreeting.IsInsufficientEvidence {
+		t.Errorf("expected IsInsufficientEvidence = false for greeting")
+	}
+	if !strings.Contains(respGreeting.Answer, "CodeGraph's AI assistant") {
+		t.Errorf("expected greeting answer content, got: %s", respGreeting.Answer)
+	}
+
+	reqOverview, err := models.NewExplanationRequest(scope, "explain the code")
+	if err != nil {
+		t.Fatalf("failed to create overview request: %v", err)
+	}
+
+	respOverview, err := svc.ExplainRequest(context.Background(), reqOverview)
+	if err != nil {
+		t.Fatalf("ExplainRequest failed for overview: %v", err)
+	}
+	if respOverview.Status != models.ExplanationStatusSuccess {
+		t.Errorf("expected ExplanationStatusSuccess, got %s", respOverview.Status)
+	}
+	if respOverview.Sufficiency.Status != models.SufficiencySufficient {
+		t.Errorf("expected SufficiencySufficient, got %s", respOverview.Sufficiency.Status)
+	}
+	if respOverview.IsInsufficientEvidence {
+		t.Errorf("expected IsInsufficientEvidence = false for overview")
+	}
+}

@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -363,5 +364,106 @@ func TestRepositoryIsolationInGraphEngine(t *testing.T) {
 		if n.RepositoryID != repoB {
 			t.Errorf("Repository isolation error: engine B returned node from repository %s", n.RepositoryID)
 		}
+	}
+}
+
+func TestCrossFileSymbolLinkingAndFlowTracing(t *testing.T) {
+	repo := &models.Repository{ID: "repo-crossfile", Name: "CrossFileRepo"}
+	manifest := []*models.FileManifestItem{
+		{ID: "file-main", RelativePath: "cmd/main.go", Status: models.FileStatusIndexed},
+		{ID: "file-service", RelativePath: "internal/service/service.go", Status: models.FileStatusIndexed},
+		{ID: "file-helper", RelativePath: "internal/service/helper.go", Status: models.FileStatusIndexed},
+	}
+
+	analysis := &models.AnalysisResult{
+		RepositoryID: repo.ID,
+		Symbols: []*models.Symbol{
+			{ID: "sym-main", FileID: "file-main", RelativePath: "cmd/main.go", Name: "main", QualifiedName: "main.main", Kind: models.SymbolKindFunction},
+			{ID: "sym-run", FileID: "file-service", RelativePath: "internal/service/service.go", Name: "Run", QualifiedName: "service.Run", Kind: models.SymbolKindFunction},
+			{ID: "sym-helper", FileID: "file-helper", RelativePath: "internal/service/helper.go", Name: "helper", QualifiedName: "service.helper", Kind: models.SymbolKindFunction},
+		},
+		Relationships: []*models.Relationship{
+			// cmd/main.go imports myrepo/internal/service
+			{ID: "rel-imp-1", SourceID: "file-main", TargetID: "myrepo/internal/service", TargetKind: models.TargetKindInternal, Type: models.RelTypeImports, Status: models.RelStatusResolved, FileID: "file-main", Location: models.Location{StartLine: 4}},
+			// main() in cmd/main.go calls service.Run (unresolved cross-file call)
+			{ID: "rel-call-1", SourceID: "sym-main", TargetID: "service.Run", TargetKind: models.TargetKindInternal, Type: models.RelTypeCalls, Status: models.RelStatusUnresolved, FileID: "file-main", Location: models.Location{StartLine: 8}},
+			// Run() in internal/service/service.go calls helper() (package-local call in another file)
+			{ID: "rel-call-2", SourceID: "sym-run", TargetID: "helper", TargetKind: models.TargetKindInternal, Type: models.RelTypeCalls, Status: models.RelStatusPartial, FileID: "file-service", Location: models.Location{StartLine: 12}},
+		},
+	}
+
+	synchronizer := NewSynchronizer()
+	nodes, edges, err := synchronizer.Synchronize(context.Background(), repo, manifest, analysis)
+	if err != nil {
+		t.Fatalf("Synchronize failed: %v", err)
+	}
+
+	targetRunNodeID := FormatNodeID(models.NodeKindSymbol, repo.ID, "sym-run")
+	targetHelperNodeID := FormatNodeID(models.NodeKindSymbol, repo.ID, "sym-helper")
+
+	// 1. Verify cross-package call main -> service.Run resolved to sym-run
+	var call1Edge *models.Edge
+	var call2Edge *models.Edge
+	for _, ed := range edges {
+		if ed.Kind == models.EdgeKindCalls {
+			if strings.Contains(ed.SourceID, "sym-main") {
+				call1Edge = ed
+			} else if strings.Contains(ed.SourceID, "sym-run") {
+				call2Edge = ed
+			}
+		}
+	}
+
+	if call1Edge == nil {
+		t.Fatalf("expected call edge from sym-main")
+	}
+	if call1Edge.TargetID != targetRunNodeID {
+		t.Errorf("cross-file resolution error: expected TargetID=%s, got %s", targetRunNodeID, call1Edge.TargetID)
+	}
+	if call1Edge.Status != models.RelStatusResolved {
+		t.Errorf("cross-file status error: expected RESOLVED, got %s", call1Edge.Status)
+	}
+
+	// 2. Verify package-local call Run -> helper resolved to sym-helper
+	if call2Edge == nil {
+		t.Fatalf("expected call edge from sym-run")
+	}
+	if call2Edge.TargetID != targetHelperNodeID {
+		t.Errorf("package-local resolution error: expected TargetID=%s, got %s", targetHelperNodeID, call2Edge.TargetID)
+	}
+	if call2Edge.Status != models.RelStatusResolved {
+		t.Errorf("package-local status error: expected RESOLVED, got %s", call2Edge.Status)
+	}
+
+	// 3. Test Static Flow Tracing across package boundaries in Graph Engine
+	engine := NewEngine(repo.ID)
+	engine.LoadGraph(nodes, edges)
+
+	flowRes := engine.TraceStaticFlow("sym-main", "", 10, 50)
+	if flowRes.TerminationReason != models.FlowReasonTargetReached {
+		t.Errorf("flow trace termination reason mismatch: got %s", flowRes.TerminationReason)
+	}
+	if flowRes.Path == nil || len(flowRes.Path.Steps) != 3 {
+		t.Fatalf("expected 3 steps in static flow trace (main -> Run -> helper), got %d steps", len(flowRes.Path.Steps))
+	}
+	if flowRes.Path.Steps[0].NodeID != FormatNodeID(models.NodeKindSymbol, repo.ID, "sym-main") {
+		t.Errorf("step 0 node mismatch: %s", flowRes.Path.Steps[0].NodeID)
+	}
+	if flowRes.Path.Steps[1].NodeID != targetRunNodeID {
+		t.Errorf("step 1 node mismatch: %s", flowRes.Path.Steps[1].NodeID)
+	}
+	if flowRes.Path.Steps[2].NodeID != targetHelperNodeID {
+		t.Errorf("step 2 node mismatch: %s", flowRes.Path.Steps[2].NodeID)
+	}
+
+	// 4. Test Cross-File Callers/Callees lookup
+	callers := engine.GetCallers("sym-run")
+	if len(callers) != 1 || callers[0].CallerNode.ID != FormatNodeID(models.NodeKindSymbol, repo.ID, "sym-main") {
+		t.Errorf("GetCallers error: expected caller sym-main, got %+v", callers)
+	}
+
+	callees := engine.GetCallees("sym-main")
+	if len(callees) != 1 || callees[0].CalleeNode.ID != targetRunNodeID {
+		t.Errorf("GetCallees error: expected callee sym-run, got %+v", callees)
 	}
 }

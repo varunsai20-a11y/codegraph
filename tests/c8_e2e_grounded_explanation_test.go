@@ -78,7 +78,7 @@ func TestE2E_GroundedExplanationWorkflow(t *testing.T) {
 
 	// Case 1: Valid Grounded Explanation Request
 	mockValidProv := llm.NewMockLLMProvider("Main application entry point initializes App service [E1].", nil)
-	lexRetriever := retrieval.NewLexicalRetriever(store)
+	lexRetriever := retrieval.NewLexicalRetriever(store, nil)
 	composer := retrieval.NewDefaultEvidenceComposer(lexRetriever, nil, store)
 	expSvc1 := llm.NewGroundedExplanationService(mockValidProv, nil, composer, nil)
 	server.SetExplanationService(expSvc1)
@@ -124,7 +124,7 @@ func TestE2E_GroundedExplanationWorkflow(t *testing.T) {
 	server.SetExplanationService(expSvc2)
 
 	explainBody2, _ := json.Marshal(map[string]interface{}{
-		"query":     "How does authentication work?",
+		"query":     "How does the main application initialize?",
 		"symbol_id": validSymID,
 	})
 	explainReq2 := httptest.NewRequest("POST", "/api/repositories/"+repo.ID+"/explain", bytes.NewReader(explainBody2))

@@ -31,6 +31,13 @@ type Indexer struct {
 	mu               sync.RWMutex
 	graphEngines     map[string]*graph.Engine
 	onPostSaveCommit func(repoID string) error
+	vectorIndexer    *VectorIndexer
+}
+
+func (idx *Indexer) SetVectorIndexer(vIndexer *VectorIndexer) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.vectorIndexer = vIndexer
 }
 
 func NewIndexer(cfg *config.Config, store storage.Storage, wsMgr *repository.WorkspaceManager) *Indexer {
@@ -176,6 +183,20 @@ func (idx *Indexer) RunIndex(ctx context.Context, job *models.IndexJob, repo *mo
 	// 7. Atomic Persistence to SQLite in a single transaction
 	if saveErr = idx.store.SaveIndexData(ctx, repo.ID, manifestItems, analysisResult.Symbols, analysisResult.Relationships, nodes, edges); saveErr != nil {
 		return idx.failJob(ctx, job, repo, fmt.Errorf("failed to save index data: %w", saveErr))
+	}
+
+	// 7.5 Generate and persist code-aware semantic vector embeddings if configured
+	idx.mu.RLock()
+	vIndexer := idx.vectorIndexer
+	idx.mu.RUnlock()
+	if vIndexer != nil {
+		scope, scopeErr := models.NewRepositoryScope(repo.ID)
+		if scopeErr == nil {
+			if vErr := vIndexer.IndexRepositoryVectors(ctx, scope, repoWorkspace, manifestItems, analysisResult.Symbols); vErr != nil {
+				// Log indexing warning without failing structural graph index
+				fmt.Printf("[Indexer WARN] Vector embedding indexing warning for repo %s: %v\n", repo.ID, vErr)
+			}
+		}
 	}
 
 	if idx.onPostSaveCommit != nil {

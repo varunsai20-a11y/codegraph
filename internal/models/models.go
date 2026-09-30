@@ -293,3 +293,42 @@ type StaticFlowResult struct {
 	QueryLatencyMs        float64               `json:"query_latency_ms"`
 	Notice                string                `json:"notice"`
 }
+
+// Architecture Flow & GitDiagram Models
+
+type ModuleCategory string
+
+const (
+	CategoryEntrypoint ModuleCategory = "ENTRYPOINT"
+	CategoryService    ModuleCategory = "SERVICE"
+	CategoryStorage    ModuleCategory = "STORAGE"
+	CategoryExternal   ModuleCategory = "EXTERNAL"
+)
+
+type ArchitectureModule struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Path        string         `json:"path"`
+	Category    ModuleCategory `json:"category"`
+	FileCount   int            `json:"file_count"`
+	SymbolCount int            `json:"symbol_count"`
+	NodeIDs     []string       `json:"node_ids"`
+}
+
+type ArchitectureEdge struct {
+	ID               string   `json:"id"`
+	SourceModule     string   `json:"source_module"`
+	TargetModule     string   `json:"target_module"`
+	InteractionCount int      `json:"interaction_count"`
+	Kinds            []string `json:"kinds"`
+	Label            string   `json:"label"`
+}
+
+type ArchitectureDiagram struct {
+	RepositoryID string                `json:"repository_id"`
+	Modules      []*ArchitectureModule `json:"modules"`
+	Edges        []*ArchitectureEdge   `json:"edges"`
+	MermaidCode  string                `json:"mermaid_code"`
+	TotalModules int                   `json:"total_modules"`
+	TotalEdges   int                   `json:"total_edges"`
+}

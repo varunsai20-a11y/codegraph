@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"strings"
 
 	"codegraph/internal/models"
 	"codegraph/internal/retrieval"
@@ -27,6 +28,24 @@ func (b *GroundedPromptBuilder) BuildPrompt(req *models.ExplanationRequest, pkg 
 	}
 
 	groundedCtx := retrieval.BuildGroundedContext(pkg)
+
+	if len(req.History) > 0 {
+		historyWindow := req.History
+		if len(historyWindow) > 6 {
+			historyWindow = historyWindow[len(historyWindow)-6:]
+		}
+		var hLines []string
+		hLines = append(hLines, "--- PRIOR CONVERSATION HISTORY ---")
+		for _, msg := range historyWindow {
+			roleLabel := "User"
+			if strings.EqualFold(msg.Role, "assistant") || strings.EqualFold(msg.Role, "system") {
+				roleLabel = "Assistant"
+			}
+			hLines = append(hLines, fmt.Sprintf("%s: %s", roleLabel, msg.Content))
+		}
+		hLines = append(hLines, "--- END PRIOR CONVERSATION HISTORY ---")
+		groundedCtx = groundedCtx + "\n\n" + strings.Join(hLines, "\n")
+	}
 
 	return LLMRequest{
 		SystemInstruction: BuildSystemInstruction(),

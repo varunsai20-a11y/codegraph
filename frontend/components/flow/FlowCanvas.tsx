@@ -15,6 +15,7 @@ import {
 
 interface FlowCanvasProps {
   flowResult: StaticFlowResult | null;
+  flowRootNodeID?: string | null;
   selectedStepIndex: number | null;
   onSelectStep: (index: number) => void;
   isLoading: boolean;
@@ -22,6 +23,7 @@ interface FlowCanvasProps {
 
 export const FlowCanvas: React.FC<FlowCanvasProps> = ({
   flowResult,
+  flowRootNodeID,
   selectedStepIndex,
   onSelectStep,
   isLoading,
@@ -29,61 +31,69 @@ export const FlowCanvas: React.FC<FlowCanvasProps> = ({
   if (isLoading) {
     return (
       <div className="h-full flex flex-col items-center justify-center p-8 bg-background">
-        <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin mb-3" />
-        <p className="text-xs text-gray-400 font-mono">Computing static call flow...</p>
+        <div className="w-6 h-6 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin mb-3" />
+        <p className="text-xs text-gray-400 font-mono">Tracing static call graph paths...</p>
       </div>
     );
   }
 
-  if (!flowResult) {
+  // State 1: No Root Selected
+  if (!flowRootNodeID && !flowResult) {
     return (
-      <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none">
-        <GitFork className="w-10 h-10 text-gray-500 mb-3" />
-        <h3 className="text-sm font-bold text-gray-200">No Static Call Flow Loaded</h3>
-        <p className="text-xs text-gray-400 max-w-sm mt-1">
-          Select a symbol from the Knowledge Graph or Repository Explorer and click &quot;Trace Static Flow&quot; to inspect its static call path.
+      <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none font-mono">
+        <GitFork className="w-10 h-10 text-cyan-400 mb-3" />
+        <h3 className="text-sm font-bold text-gray-200 uppercase tracking-wider">No Root Selected</h3>
+        <p className="text-xs text-gray-400 max-w-sm mt-1 leading-relaxed font-sans">
+          Select a symbol from the Knowledge Graph, Code Viewer, or Explorer and click <strong className="text-cyan-300 font-mono">&quot;Trace Static Flow&quot;</strong> to inspect static call paths.
         </p>
       </div>
     );
   }
 
-  if (flowResult.termination_reason === "INVALID_ROOT") {
+  // State 4: Insufficient Static Evidence / Invalid Root
+  if (flowResult?.termination_reason === "INVALID_ROOT") {
     return (
-      <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none">
+      <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none font-mono">
         <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 mb-3">
           <AlertTriangle className="w-6 h-6" />
         </div>
-        <h3 className="text-sm font-bold text-red-300">Invalid Static Flow Root</h3>
-        <p className="text-xs text-red-400/90 max-w-md mt-1">
-          Static call flow requires a valid symbol root (<code className="font-mono text-white">NODE_SYMBOL</code>). Selected target is not a valid executable symbol in the graph.
+        <h3 className="text-sm font-bold text-red-300 uppercase tracking-wider">Insufficient Static Evidence</h3>
+        <p className="text-xs text-red-400/90 max-w-md mt-1 leading-relaxed font-sans">
+          Static call flow requires a valid symbol node in AST graph storage. The selected target does not contain static call edges.
         </p>
       </div>
     );
   }
 
-  if (flowResult.termination_reason === "TARGET_NOT_FOUND") {
+  if (flowResult?.termination_reason === "TARGET_NOT_FOUND") {
     return (
-      <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none">
+      <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none font-mono">
         <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-3">
           <HelpCircle className="w-6 h-6" />
         </div>
-        <h3 className="text-sm font-bold text-amber-300">Target Node Not Found</h3>
-        <p className="text-xs text-amber-400/90 max-w-md mt-1">
-          Target symbol <code className="font-mono text-white">{flowResult.target_node_id}</code> does not exist in the repository graph.
+        <h3 className="text-sm font-bold text-amber-300 uppercase tracking-wider">Target Node Not Found</h3>
+        <p className="text-xs text-amber-400/90 max-w-md mt-1 leading-relaxed font-sans">
+          Target symbol <code className="font-mono text-white">{flowResult.target_node_id}</code> was not found in the static relationship index.
         </p>
       </div>
     );
   }
 
-  if (flowResult.termination_reason === "NO_PATH") {
+  // State 2: Root Selected but No Call Relationships Found
+  if (
+    !flowResult ||
+    flowResult.termination_reason === "NO_PATH" ||
+    (flowResult.path?.steps && flowResult.path.steps.length <= 1)
+  ) {
+    const rootLabel = flowRootNodeID || flowResult?.root_node_id || "Root Symbol";
     return (
-      <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none">
+      <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none font-mono">
         <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-3">
           <GitFork className="w-6 h-6 rotate-180" />
         </div>
-        <h3 className="text-sm font-bold text-amber-300">No Directed Call Path Found</h3>
-        <p className="text-xs text-amber-400/90 max-w-md mt-1">
-          No static <code className="font-mono text-white">EDGE_CALLS</code> path connects root symbol to target symbol within depth limit ({flowResult.max_depth}).
+        <h3 className="text-sm font-bold text-amber-300 uppercase tracking-wider">Root Selected — No Call Relationships Found</h3>
+        <p className="text-xs text-amber-400/90 max-w-md mt-1 leading-relaxed font-sans">
+          Root symbol <code className="font-mono text-white">{rootLabel}</code> was analyzed, but no static <code className="font-mono text-cyan-300">EDGE_CALLS</code> outgoing relationships exist in AST static analysis.
         </p>
       </div>
     );

@@ -16,6 +16,7 @@ import {
   AlertTriangle,
   RefreshCw,
   FolderTree,
+  Terminal,
 } from "lucide-react";
 
 export const SyncWorkspace: React.FC = () => {
@@ -104,23 +105,23 @@ export const SyncWorkspace: React.FC = () => {
 
   if (!activeRepo) {
     return (
-      <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none">
+      <div className="h-full flex flex-col items-center justify-center p-8 bg-background text-center select-none font-mono">
         <Network className="w-10 h-10 text-gray-500 mb-3" />
-        <h3 className="text-sm font-bold text-gray-200">No Repository Selected</h3>
+        <h3 className="text-sm font-bold text-gray-200 uppercase">No Repository Selected</h3>
         <p className="text-xs text-gray-400 max-w-sm mt-1">
-          Select a repository from the header dropdown to launch the Synchronized Workspace.
+          Select a repository to launch the Synchronized Code & Graph Workspace.
         </p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full bg-background overflow-hidden">
+    <div className="flex flex-col h-full bg-background overflow-hidden font-mono">
       {/* Synchronized Context Indicator Bar */}
-      <div className="h-10 border-b border-border bg-surface px-4 flex items-center justify-between shrink-0 select-none text-xs">
+      <div className="h-10 border-b border-border bg-surface px-3.5 flex items-center justify-between shrink-0 select-none text-xs">
         <div className="flex items-center space-x-3 truncate">
-          <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-accent/20 border border-accent/40 text-accent flex items-center gap-1.5 shrink-0">
-            <RefreshCw className="w-3 h-3 animate-spin-slow" /> SYNC WORKSPACE
+          <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-sm bg-cyan-950/70 border border-cyan-500/40 text-cyan-300 flex items-center gap-1.5 shrink-0">
+            <RefreshCw className="w-3 h-3 text-cyan-400" /> SYNC WORKSPACE
           </span>
 
           <div className="flex items-center space-x-2 text-gray-300 font-mono text-[11px] truncate">
@@ -142,15 +143,15 @@ export const SyncWorkspace: React.FC = () => {
             {selectedSymbolNode && (
               <>
                 <span className="text-gray-600">/</span>
-                <span className="flex items-center gap-1 text-purple-300 truncate">
-                  <Code2 className="w-3 h-3 text-purple-400 shrink-0" />
+                <span className="flex items-center gap-1 text-cyan-300 truncate">
+                  <Code2 className="w-3 h-3 text-cyan-400 shrink-0" />
                   <span className="truncate">{selectedSymbolNode.label}</span>
                 </span>
               </>
             )}
 
             {highlightLineRange && (
-              <span className="text-accent font-semibold px-1.5 py-0.5 rounded bg-accent/10 border border-accent/20 text-[10px] shrink-0">
+              <span className="text-cyan-300 font-bold px-1.5 py-0.5 rounded-sm bg-cyan-950/60 border border-cyan-500/40 text-[10px] shrink-0">
                 L{highlightLineRange[0]}–L{highlightLineRange[1]}
               </span>
             )}
@@ -177,7 +178,7 @@ export const SyncWorkspace: React.FC = () => {
                   value={treeSearchQuery}
                   onChange={(e) => setTreeSearchQuery(e.target.value)}
                   placeholder="Filter tree..."
-                  className="w-full bg-background border border-border rounded px-2 py-1 text-[11px] text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent"
+                  className="w-full bg-background border border-border rounded-sm px-2 py-1 text-[11px] font-mono text-gray-200 placeholder-gray-500 focus:outline-none focus:border-cyan-500"
                 />
               </div>
               <RepositoryTree
@@ -226,7 +227,7 @@ export const SyncWorkspace: React.FC = () => {
           />
 
           {graphError && (
-            <div className="mx-3 mt-2 border border-red-500/40 bg-red-500/10 text-red-300 rounded-lg p-2.5 flex items-center justify-between shrink-0 select-none">
+            <div className="mx-3 mt-2 border border-red-500/40 bg-red-950/20 text-red-300 rounded-sm p-2.5 flex items-center justify-between shrink-0 select-none font-mono">
               <div className="flex items-center space-x-2 text-xs">
                 <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
                 <span>{graphError}</span>
@@ -234,7 +235,7 @@ export const SyncWorkspace: React.FC = () => {
               {activeRepoID && (
                 <button
                   onClick={() => fetchGraph(activeRepoID, { scope: graphScope })}
-                  className="px-2 py-0.5 rounded text-xs bg-red-500/20 border border-red-500/40 text-red-200"
+                  className="px-2 py-0.5 rounded-sm text-xs bg-red-950 border border-red-500/40 text-red-200 font-bold"
                 >
                   Retry
                 </button>
@@ -246,12 +247,12 @@ export const SyncWorkspace: React.FC = () => {
             {/* Graph Canvas */}
             <div className="flex-1 relative overflow-hidden">
               {isLoadingGraph && visibleNodes.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center p-6 bg-background">
-                  <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin mb-2" />
+                <div className="h-full flex flex-col items-center justify-center p-6 bg-background font-mono">
+                  <div className="w-6 h-6 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin mb-2" />
                   <p className="text-xs text-gray-400">Loading graph...</p>
                 </div>
               ) : visibleNodes.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center p-6 text-center text-xs text-gray-400 select-none">
+                <div className="h-full flex flex-col items-center justify-center p-6 text-center text-xs text-gray-400 select-none font-mono">
                   <Network className="w-8 h-8 text-gray-500 mb-2" />
                   <p>No nodes match current filters.</p>
                 </div>
@@ -266,7 +267,7 @@ export const SyncWorkspace: React.FC = () => {
               )}
 
               {/* Stats overlay */}
-              <div className="absolute bottom-2 left-2 bg-surface/90 border border-border backdrop-blur-md px-2.5 py-1 rounded text-[10px] text-gray-300 flex items-center space-x-2 pointer-events-none select-none">
+              <div className="absolute bottom-2 left-2 bg-surface/90 border border-border backdrop-blur-md px-2.5 py-1 rounded-sm text-[10px] text-gray-300 flex items-center space-x-2 pointer-events-none select-none font-mono">
                 <span>Nodes: <strong className="text-white">{visibleNodes.length}</strong></span>
                 <span>Edges: <strong className="text-white">{visibleEdges.length}</strong></span>
               </div>

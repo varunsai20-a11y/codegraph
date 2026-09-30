@@ -33,6 +33,7 @@ const (
 
 type ModuleSummary struct {
 	Directory   string   `json:"directory"`
+	Name        string   `json:"name,omitempty"`
 	FileCount   int      `json:"file_count"`
 	SymbolCount int      `json:"symbol_count"`
 	Languages   []string `json:"languages,omitempty"`
@@ -40,12 +41,17 @@ type ModuleSummary struct {
 
 type ArchitectureSummary struct {
 	RepositoryID            string          `json:"repository_id"`
+	Overview                string          `json:"overview,omitempty"`
 	TotalFiles              int             `json:"total_files"`
 	TotalSymbols            int             `json:"total_symbols"`
 	TotalRelationships      int             `json:"total_relationships"`
+	TotalEdges              int             `json:"total_edges,omitempty"`
 	TopModules              []ModuleSummary `json:"top_modules"`
-	EntryPointCandidates    []*Symbol       `json:"entry_point_candidates"`
-	HighConnectivitySymbols []*Node         `json:"high_connectivity_symbols"`
+	MajorModules            []ModuleSummary `json:"major_modules,omitempty"`
+	EntryPointCandidates    []*Symbol       `json:"entry_point_candidates_syms,omitempty"`
+	EntryPointCandidatesStr []string        `json:"entry_point_candidates,omitempty"`
+	HighConnectivitySymbols []*Node         `json:"high_connectivity_symbols_nodes,omitempty"`
+	HighConnectivitySymsStr []string        `json:"high_connectivity_symbols,omitempty"`
 	ExternalBoundaries      []string        `json:"external_boundaries"`
 }
 
@@ -53,12 +59,16 @@ type InvestigationStep struct {
 	ID                 string                  `json:"id"`
 	Sequence           int                     `json:"sequence"`
 	Type               InvestigationStepType   `json:"type"`
+	StepType           InvestigationStepType   `json:"step_type,omitempty"`
 	Title              string                  `json:"title"`
 	Description        string                  `json:"description"`
 	FileID             string                  `json:"file_id,omitempty"`
 	RelativePath       string                  `json:"relative_path,omitempty"`
+	TargetFile         string                  `json:"target_file,omitempty"`
 	SymbolID           string                  `json:"symbol_id,omitempty"`
+	TargetSymbol       string                  `json:"target_symbol,omitempty"`
 	SymbolName         string                  `json:"symbol_name,omitempty"`
+	TargetNode         string                  `json:"target_node,omitempty"`
 	FlowResult         *StaticFlowResult       `json:"flow_result,omitempty"`
 	Evidence           []*ExplanationEvidence  `json:"evidence,omitempty"`
 	SuggestedQuestions []string                `json:"suggested_questions,omitempty"`

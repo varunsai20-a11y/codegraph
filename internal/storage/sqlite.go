@@ -228,6 +228,10 @@ func (s *SQLiteStorage) RegistrationLock() *sync.Mutex {
 	return &s.regMutex
 }
 
+func (s *SQLiteStorage) DB() *sql.DB {
+	return s.db
+}
+
 func (s *SQLiteStorage) Close() error {
 	var errs []string
 	if s.db != nil {

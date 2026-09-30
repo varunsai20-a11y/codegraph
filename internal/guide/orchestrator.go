@@ -206,11 +206,20 @@ func (o *DefaultGuideOrchestrator) buildDeterministicSteps(
 		highConnName = fmt.Sprintf("%s (%s)", highConnNode.Label, highConnNode.RelativePath)
 	}
 
-	topModDirs := make([]string, 0)
-	for _, m := range summary.TopModules {
-		topModDirs = append(topModDirs, m.Directory)
+	activeModules := summary.MajorModules
+	if len(activeModules) == 0 {
+		activeModules = summary.TopModules
 	}
-	topModSummaryStr := strings.Join(topModDirs, ", ")
+	majorModDirs := make([]string, 0, len(activeModules))
+	for _, m := range activeModules {
+		majorModDirs = append(majorModDirs, m.Directory)
+	}
+	majorModSummaryStr := strings.Join(majorModDirs, ", ")
+
+	extBoundaryStr := "none confidently identified"
+	if len(summary.ExternalBoundaries) > 0 {
+		extBoundaryStr = strings.Join(summary.ExternalBoundaries, ", ")
+	}
 
 	// Step 1: System Purpose & Scope
 	step1 := &models.InvestigationStep{
@@ -219,7 +228,7 @@ func (o *DefaultGuideOrchestrator) buildDeterministicSteps(
 		Type:        models.StepOverview,
 		StepType:    models.StepOverview,
 		Title:       "1. System Purpose & Architecture Scope",
-		Description: fmt.Sprintf("Repository '%s' comprises %d source files, %d symbols, and %d AST relationships across %d primary modules (%s). Execution is driven by primary entrypoint '%s'. External boundaries & services include: %s.", scope.RepositoryID, summary.TotalFiles, summary.TotalSymbols, summary.TotalRelationships, len(summary.TopModules), topModSummaryStr, entrySymName, strings.Join(summary.ExternalBoundaries, ", ")),
+		Description: fmt.Sprintf("Repository '%s' comprises %d source files, %d symbols, and %d AST relationships across %d primary architectural modules [%s] (%d repository directories detected). Execution is driven by primary entrypoint '%s'. External boundaries & services include: %s.", scope.RepositoryID, summary.TotalFiles, summary.TotalSymbols, summary.TotalRelationships, len(activeModules), majorModSummaryStr, len(summary.TopModules), entrySymName, extBoundaryStr),
 		SuggestedQuestions: []string{
 			"What is the overall architectural purpose of this repository?",
 			"What external services or frameworks does this system depend on?",
@@ -240,8 +249,8 @@ func (o *DefaultGuideOrchestrator) buildDeterministicSteps(
 
 	// Step 2: Major Modules & Responsibilities
 	targetDir := "root"
-	if len(summary.TopModules) > 0 {
-		targetDir = summary.TopModules[0].Directory
+	if len(activeModules) > 0 {
+		targetDir = activeModules[0].Directory
 	}
 
 	step2 := &models.InvestigationStep{
@@ -250,7 +259,7 @@ func (o *DefaultGuideOrchestrator) buildDeterministicSteps(
 		Type:        models.StepModuleStructure,
 		StepType:    models.StepModuleStructure,
 		Title:       fmt.Sprintf("2. Major Modules & Responsibilities (%s)", targetDir),
-		Description: fmt.Sprintf("Building on the system overview, execution flow partitions responsibilities across primary modules [%s]. Control flow enters at '%s' (symbol '%s') and delegates domain logic to core module '%s'.", topModSummaryStr, entrySymName, getSymbolName(entrySym), targetDir),
+		Description: fmt.Sprintf("Building on the system overview, execution flow partitions responsibilities across %d primary architectural modules [%s]. Control flow enters at '%s' (symbol '%s') and delegates domain logic to core module '%s'.", len(activeModules), majorModSummaryStr, entrySymName, getSymbolName(entrySym), targetDir),
 		SuggestedQuestions: []string{
 			fmt.Sprintf("What are the primary responsibilities of module '%s'?", targetDir),
 			"How does control move from the entrypoint to internal modules?",
@@ -354,7 +363,7 @@ func (o *DefaultGuideOrchestrator) buildDeterministicSteps(
 		Type:        models.StepGroundedExplain,
 		StepType:    models.StepGroundedExplain,
 		Title:       "5. End-to-End Architectural Synthesis",
-		Description: fmt.Sprintf("Architectural Synthesis: Repository '%s' is an AST-verified system structured into %d primary modules [%s]. System execution originates in entrypoint '%s', passes control through key component '%s', and follows verified call flow (%s). Data moves from entry parameters through module handoffs to external boundaries (%s).", scope.RepositoryID, len(summary.TopModules), topModSummaryStr, entrySymName, highConnName, flowSummaryStr, strings.Join(summary.ExternalBoundaries, ", ")),
+		Description: fmt.Sprintf("Architectural Synthesis: Repository '%s' is an AST-verified system structured into %d primary architectural modules [%s]. System execution originates in entrypoint '%s', delegates control to primary component '%s', and follows verified static call flow (%s). Data moves from entry parameters through module handoffs to external boundaries (%s). [Statically Verified: Entrypoint, AST call edges, module imports. Inferred: Parameter data handoffs. Unavailable: Dynamic runtime dispatch & LLM outputs].", scope.RepositoryID, len(activeModules), majorModSummaryStr, entrySymName, highConnName, flowSummaryStr, extBoundaryStr),
 		SuggestedQuestions: []string{
 			"Summarize the end-to-end architectural design of this codebase.",
 			"How do entrypoints, modules, and key symbols interact across file boundaries?",
@@ -433,7 +442,7 @@ func generateDynamicFlowNarrative(
 				if step.Node.RelativePath != "" {
 					lbl = fmt.Sprintf("%s:%s", step.Node.RelativePath, step.Node.Label)
 				}
-				labels = append(labels, fmt.Sprintf("`%s`", lbl))
+				labels = append(labels, lbl)
 				dataLabels = append(dataLabels, fmt.Sprintf("%s Handoff", step.Node.Label))
 			}
 		}
@@ -454,7 +463,7 @@ func generateDynamicFlowNarrative(
 				if node.RelativePath != "" {
 					lbl = fmt.Sprintf("%s:%s", node.RelativePath, node.Label)
 				}
-				labels = append(labels, fmt.Sprintf("`%s`", lbl))
+				labels = append(labels, lbl)
 				dataLabels = append(dataLabels, fmt.Sprintf("%s Data", node.Label))
 				count++
 				if count >= 4 {
@@ -471,9 +480,8 @@ func generateDynamicFlowNarrative(
 		}
 	}
 
-	pathSummary = fmt.Sprintf("`%s` → `%s`", entryStr, highConnStr)
+	pathSummary = fmt.Sprintf("%s → %s", entryStr, highConnStr)
 	callNarrative = fmt.Sprintf("Execution Narrative: System execution initiates in entrypoint '%s' and directs control to primary architectural component '%s'.", entryStr, highConnStr)
 	dataFlowNarrative = fmt.Sprintf("Static Data Flow: User Input / CLI → [%s] Parameters → [%s] Processing → Result Output.", entryStr, highConnStr)
 	return callNarrative, dataFlowNarrative, pathSummary
 }
-

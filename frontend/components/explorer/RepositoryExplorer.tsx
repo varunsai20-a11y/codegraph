@@ -14,6 +14,8 @@ import {
   Binary,
   CheckCircle2,
   FolderTree,
+  Terminal,
+  Cpu,
 } from "lucide-react";
 
 export const RepositoryExplorer: React.FC = () => {
@@ -52,60 +54,60 @@ export const RepositoryExplorer: React.FC = () => {
   const binaryCount = fileManifest.filter((f) => f.status === "BINARY").length;
 
   return (
-    <div className="flex flex-col h-full bg-background overflow-hidden">
-      {/* Top Repository Summary & Filter Bar */}
-      <div className="border-b border-border bg-surface px-4 py-3 shrink-0 space-y-3 select-none">
+    <div className="flex flex-col h-full bg-background overflow-hidden font-mono">
+      {/* Top Repository Bar */}
+      <div className="border-b border-border bg-surface px-3.5 py-2 shrink-0 space-y-2 select-none text-xs">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/30 flex items-center justify-center text-accent">
-              <HardDrive className="w-4 h-4" />
+            <div className="w-6 h-6 rounded-sm bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+              <Terminal className="w-3.5 h-3.5" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <h2 className="text-sm font-bold text-gray-100">
+                <h2 className="text-xs font-bold text-gray-100 font-mono">
                   {activeRepo ? activeRepo.name : "No Repository Selected"}
                 </h2>
                 {activeRepo && (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-semibold font-mono">
-                    {activeRepo.status}
+                  <span className="text-[9px] px-1.5 py-0.2 rounded-sm bg-emerald-950/60 border border-emerald-500/40 text-emerald-400 font-bold font-mono">
+                    {activeRepo.status === "INDEXED" ? "READY" : activeRepo.status}
                   </span>
                 )}
               </div>
               {activeRepo && (
-                <p className="text-[11px] text-gray-400 font-mono truncate max-w-md">
-                  ID: {activeRepo.id} {activeRepo.local_path ? `| Path: ${activeRepo.local_path}` : ""}
+                <p className="text-[10px] text-gray-500 font-mono truncate max-w-md">
+                  {activeRepo.local_path || activeRepo.id}
                 </p>
               )}
             </div>
           </div>
 
           {activeRepo && (
-            <div className="flex items-center space-x-3 text-xs">
-              <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-background border border-border text-gray-300">
-                <FileText className="w-3.5 h-3.5 text-accent" />
+            <div className="flex items-center space-x-2 text-[10px] font-mono">
+              <div className="flex items-center space-x-1 px-2 py-0.5 rounded-sm bg-background border border-border text-gray-300">
+                <FileText className="w-3 h-3 text-cyan-400" />
                 <span>
-                  Files: <strong className="text-white">{fileManifest.length}</strong>
+                  FILES: <strong className="text-white">{fileManifest.length}</strong>
                 </span>
               </div>
-              <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-background border border-border text-gray-300">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              <div className="flex items-center space-x-1 px-2 py-0.5 rounded-sm bg-background border border-border text-gray-300">
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                 <span>
-                  Indexed: <strong className="text-white">{indexedCount}</strong>
+                  INDEXED: <strong className="text-white">{indexedCount}</strong>
                 </span>
               </div>
               {secretCount > 0 && (
-                <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-background border border-border text-red-400">
-                  <Lock className="w-3.5 h-3.5" />
+                <div className="flex items-center space-x-1 px-2 py-0.5 rounded-sm bg-background border border-border text-red-400">
+                  <Lock className="w-3 h-3" />
                   <span>
-                    Secret: <strong>{secretCount}</strong>
+                    SECRET: <strong>{secretCount}</strong>
                   </span>
                 </div>
               )}
               {binaryCount > 0 && (
-                <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-background border border-border text-amber-400">
-                  <Binary className="w-3.5 h-3.5" />
+                <div className="flex items-center space-x-1 px-2 py-0.5 rounded-sm bg-background border border-border text-amber-400">
+                  <Binary className="w-3 h-3" />
                   <span>
-                    Binary: <strong>{binaryCount}</strong>
+                    BINARY: <strong>{binaryCount}</strong>
                   </span>
                 </div>
               )}
@@ -114,20 +116,20 @@ export const RepositoryExplorer: React.FC = () => {
         </div>
 
         {/* Filter Input Bar */}
-        <div className="flex items-center space-x-3">
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-2.5" />
+        <div className="flex items-center space-x-2">
+          <div className="relative flex-1 max-w-sm">
+            <Search className="w-3 h-3 text-gray-500 absolute left-2.5 top-2 pointer-events-none" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filter repository tree by file or folder path..."
-              className="w-full bg-background border border-border rounded-md pl-9 pr-3 py-1.5 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent"
+              placeholder="Filter tree by file path..."
+              className="w-full bg-background border border-border rounded-sm pl-8 pr-3 py-1 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-cyan-500/80 font-mono"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery("")}
-                className="absolute right-2.5 top-2 text-xs text-gray-400 hover:text-white"
+                className="absolute right-2 top-1 text-xs text-gray-400 hover:text-white"
               >
                 ×
               </button>
@@ -136,17 +138,17 @@ export const RepositoryExplorer: React.FC = () => {
         </div>
       </div>
 
-      {/* Manifest Loading Error Alert */}
+      {/* Manifest Error Alert */}
       {manifestError && (
-        <div className="mx-4 mt-3 border border-red-500/40 bg-red-500/10 text-red-300 rounded-lg p-3.5 flex items-center justify-between shrink-0">
-          <div className="flex items-center space-x-2.5">
-            <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
-            <span className="text-xs">{manifestError}</span>
+        <div className="mx-3 mt-2 border border-red-500/40 bg-red-950/20 text-red-300 rounded-sm p-2.5 flex items-center justify-between shrink-0 text-xs font-mono">
+          <div className="flex items-center space-x-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+            <span>{manifestError}</span>
           </div>
           {activeRepoID && (
             <button
               onClick={() => fetchFileManifest(activeRepoID)}
-              className="px-2.5 py-1 rounded text-xs bg-red-500/20 border border-red-500/40 hover:bg-red-500/30 text-red-200 font-medium transition flex items-center gap-1"
+              className="px-2 py-0.5 rounded-sm text-[10px] bg-red-950 border border-red-500/40 hover:bg-red-900 text-red-200 font-bold transition flex items-center gap-1"
             >
               <RefreshCw className="w-3 h-3" /> Retry
             </button>
@@ -154,19 +156,19 @@ export const RepositoryExplorer: React.FC = () => {
         </div>
       )}
 
-      {/* Main Split Layout View */}
+      {/* Main Split View */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Pane: Repository Tree Navigation */}
-        <div className="w-80 border-r border-border bg-surface flex flex-col shrink-0 overflow-hidden">
+        {/* Left Tree Pane */}
+        <div className="w-72 border-r border-border bg-surface flex flex-col shrink-0 overflow-hidden">
           {isLoadingManifest ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-xs text-gray-400 space-y-2">
-              <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+            <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-xs text-gray-400 space-y-2 font-mono">
+              <div className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
               <span>Loading file manifest...</span>
             </div>
           ) : !activeRepo ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-xs text-gray-400">
-              <FolderTree className="w-8 h-8 text-gray-500 mb-2" />
-              <span>Select a repository to explore files.</span>
+            <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-xs text-gray-500 font-mono">
+              <FolderTree className="w-6 h-6 text-gray-600 mb-2" />
+              <span>Select a repository.</span>
             </div>
           ) : (
             <RepositoryTree
@@ -181,7 +183,7 @@ export const RepositoryExplorer: React.FC = () => {
           )}
         </div>
 
-        {/* Right Pane: Source Code Viewer */}
+        {/* Right Source Viewer Pane */}
         <div className="flex-1 bg-background overflow-hidden">
           <SourceViewer
             source={sourceContent}

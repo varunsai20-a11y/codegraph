@@ -32,12 +32,9 @@ func NewProcessLock(lockPath string) (*ProcessLock, error) {
 		return nil, fmt.Errorf("failed to create lock directory: %w", err)
 	}
 
-	file, err := os.OpenFile(absPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	file, err := openLockFile(absPath)
 	if err != nil {
-		if os.IsExist(err) {
-			return nil, fmt.Errorf("failed to acquire database instance lock: another CodeGraph process is running against database lockfile '%s'", absPath)
-		}
-		return nil, fmt.Errorf("failed to create instance lockfile: %w", err)
+		return nil, err
 	}
 
 	pidStr := fmt.Sprintf("%d\n", os.Getpid())
@@ -48,6 +45,41 @@ func NewProcessLock(lockPath string) (*ProcessLock, error) {
 		lockPath: absPath,
 		file:     file,
 	}, nil
+}
+
+func openLockFile(absPath string) (*os.File, error) {
+	file, err := os.OpenFile(absPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	if err != nil {
+		if os.IsExist(err) {
+			// Automatically clean up stale lockfiles if the owning PID is dead
+			if isStaleLock(absPath) {
+				_ = os.Remove(absPath)
+				fileRetry, errRetry := os.OpenFile(absPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+				if errRetry == nil {
+					return fileRetry, nil
+				}
+			}
+			return nil, fmt.Errorf("failed to acquire database instance lock: another CodeGraph process is running against database lockfile '%s'", absPath)
+		}
+		return nil, fmt.Errorf("failed to create instance lockfile: %w", err)
+	}
+	return file, nil
+}
+
+func isStaleLock(absPath string) bool {
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return true // If unreadable or empty, treat as stale
+	}
+	pidStr := strings.TrimSpace(string(data))
+	if pidStr == "" {
+		return true // Empty lockfile
+	}
+	var pid int
+	if _, err := fmt.Sscanf(pidStr, "%d", &pid); err != nil {
+		return true // Invalid format
+	}
+	return !isProcessAlive(pid)
 }
 
 // Release closes and removes the lock file.

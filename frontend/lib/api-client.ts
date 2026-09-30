@@ -11,6 +11,9 @@ import {
   APIError,
   Investigation,
   InvestigationRequest,
+  ArchitectureDiagram,
+  ChatMessage,
+  ExplanationResponse,
 } from "./types";
 
 export class CodeGraphAPIClient {
@@ -138,7 +141,11 @@ export class CodeGraphAPIClient {
     if (params?.scope) query.set("scope", params.scope);
     if (params?.target) query.set("target", params.target);
     if (params?.depth) query.set("depth", params.depth.toString());
-    if (params?.node_limit) query.set("node_limit", params.node_limit.toString());
+    const effectiveLimit = params?.limit || params?.node_limit;
+    if (effectiveLimit) {
+      query.set("node_limit", effectiveLimit.toString());
+      query.set("limit", effectiveLimit.toString());
+    }
     if (params?.edge_limit) query.set("edge_limit", params.edge_limit.toString());
     if (params?.node_types) query.set("node_types", params.node_types);
     if (params?.edge_types) query.set("edge_types", params.edge_types);
@@ -173,11 +180,12 @@ export class CodeGraphAPIClient {
       root_symbol?: string;
       target_node?: string;
       flow?: boolean;
+      history?: ChatMessage[];
       provider?: string;
     },
     signal?: AbortSignal
-  ): Promise<any> {
-    return this.request<any>(`/api/repositories/${id}/explain`, {
+  ): Promise<ExplanationResponse> {
+    return this.request<ExplanationResponse>(`/api/repositories/${id}/explain`, {
       method: "POST",
       body: JSON.stringify(payload),
       signal,
@@ -192,6 +200,15 @@ export class CodeGraphAPIClient {
     return this.request<Investigation>(`/api/repositories/${id}/guide`, {
       method: "POST",
       body: JSON.stringify(payload || { requested_action: "INITIALIZE" }),
+      signal,
+    });
+  }
+
+  async getArchitectureFlow(
+    id: string,
+    signal?: AbortSignal
+  ): Promise<ArchitectureDiagram> {
+    return this.request<ArchitectureDiagram>(`/api/repositories/${id}/architecture-flow`, {
       signal,
     });
   }

@@ -2,33 +2,26 @@ package retrieval
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"codegraph/internal/models"
+	"codegraph/internal/repository"
 	"codegraph/internal/storage"
 )
 
-// LexicalRetriever implements code-aware lexical search using Phase 2 static analysis intelligence.
-//
-// SCALABILITY BOUNDARY:
-// LexicalRetriever is currently an in-memory & SQLite baseline scanner operating directly over Phase 2
-// static symbols and file manifests. It implements the Retriever interface so an indexed engine
-// (e.g. SQLite FTS5 or trigram index) can replace the baseline without modifying higher-level contracts.
-//
-// RANKING SEMANTICS:
-// RawScore values are non-probabilistic heuristic ranking scores used strictly to order candidate lexical
-// items relative to each other. Raw scores are preserved for diagnostic provenance and are kept distinct
-// from semantic vector cosine scores, fused RRF scores (Checkpoint 5), and evidence sufficiency scores.
 type LexicalRetriever struct {
 	store   storage.Storage
+	wsMgr   *repository.WorkspaceManager
 	chunker *ASTSymbolChunker
 }
 
-func NewLexicalRetriever(store storage.Storage) *LexicalRetriever {
+func NewLexicalRetriever(store storage.Storage, wsMgr *repository.WorkspaceManager) *LexicalRetriever {
 	return &LexicalRetriever{
 		store:   store,
+		wsMgr:   wsMgr,
 		chunker: NewASTSymbolChunker(),
 	}
 }
@@ -57,11 +50,24 @@ func (r *LexicalRetriever) Retrieve(
 		return nil, err
 	}
 
-	// Fetch repository details to get local disk path if available
+	// Fetch repository details & resolve actual workspace disk path
 	repo, _ := r.store.GetRepository(ctx, scope.RepositoryID)
 	repoLocalPath := ""
 	if repo != nil {
-		repoLocalPath = repo.LocalPath
+		if r.wsMgr != nil {
+			if path, err := r.wsMgr.PrepareWorkspace(ctx, repo); err == nil && path != "" {
+				repoLocalPath = path
+			}
+		}
+		if repoLocalPath == "" {
+			repoLocalPath = repo.LocalPath
+		}
+	}
+
+	effectiveIntent := intent
+	if effectiveIntent == "" || effectiveIntent == "EXPLANATION" || effectiveIntent == IntentExplanation {
+		classifier := NewRuleBasedIntentClassifier()
+		effectiveIntent = classifier.Classify(query)
 	}
 
 	lowerQuery := strings.ToLower(trimmedQuery)
@@ -69,7 +75,7 @@ func (r *LexicalRetriever) Retrieve(
 
 	// 2. Score symbols against query and query intent
 	for _, sym := range symbols {
-		rawScore := r.calculateSymbolScore(sym, trimmedQuery, lowerQuery, intent)
+		rawScore := r.calculateSymbolScore(sym, trimmedQuery, lowerQuery, effectiveIntent)
 		if rawScore <= 0 {
 			continue
 		}
@@ -81,21 +87,146 @@ func (r *LexicalRetriever) Retrieve(
 		candidates = append(candidates, item)
 	}
 
-	// 3. Score file manifest paths against query and query intent
+	// 3. Score file manifest paths and source content against query and query intent
 	manifestItems, _ := r.store.GetManifestForRepository(ctx, scope.RepositoryID)
 	for _, f := range manifestItems {
-		rawScore := r.calculateFileScore(f, trimmedQuery, lowerQuery, intent)
+		if f.Status == models.FileStatusSecret || f.Status == models.FileStatusBinary || f.Status == models.FileStatusOversized || f.Status == models.FileStatusIgnored {
+			continue
+		}
+
+		pathScore := r.calculateFileScore(f, trimmedQuery, lowerQuery, effectiveIntent)
+
+		content := "file " + f.RelativePath + " (" + f.Language + ")"
+		evidenceType := models.EvidenceTypeDependency
+		startLine, endLine := 1, 1
+		contentScore := 0.0
+
+		if repoLocalPath != "" && f.RelativePath != "" {
+			fullPath := filepath.Join(repoLocalPath, filepath.FromSlash(f.RelativePath))
+			if info, err := os.Stat(fullPath); err == nil && !info.IsDir() && info.Size() <= 2*1024*1024 {
+				if data, err := os.ReadFile(fullPath); err == nil && len(data) > 0 {
+					lines := strings.Split(string(data), "\n")
+					totalLines := len(lines)
+
+					// Extract non-stopword query terms for content search
+					queryWords := strings.FieldsFunc(lowerQuery, func(r rune) bool {
+						return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-')
+					})
+					var nonStopTerms []string
+					for _, qw := range queryWords {
+						if len(qw) >= 3 && !isStopWord(qw) {
+							nonStopTerms = append(nonStopTerms, qw)
+						}
+					}
+
+					bestLineIdx := 0
+					maxTermMatches := 0
+					matchedTermsSet := make(map[string]bool)
+
+					for lIdx, lineStr := range lines {
+						lowerLine := strings.ToLower(lineStr)
+						matches := 0
+						for _, qw := range nonStopTerms {
+							if strings.Contains(lowerLine, qw) {
+								matches++
+								matchedTermsSet[qw] = true
+							}
+						}
+						if matches > maxTermMatches {
+							maxTermMatches = matches
+							bestLineIdx = lIdx
+						}
+					}
+
+					// Fallback to all queryWords >= 3 if no non-stop terms matched
+					if len(matchedTermsSet) == 0 {
+						for lIdx, lineStr := range lines {
+							lowerLine := strings.ToLower(lineStr)
+							matches := 0
+							for _, qw := range queryWords {
+								if len(qw) >= 3 && strings.Contains(lowerLine, qw) {
+									matches++
+									matchedTermsSet[qw] = true
+								}
+							}
+							if matches > maxTermMatches {
+								maxTermMatches = matches
+								bestLineIdx = lIdx
+							}
+						}
+					}
+
+					if len(matchedTermsSet) > 0 {
+						contentScore = 30.0 + float64(len(matchedTermsSet))*15.0
+						if maxTermMatches >= 2 {
+							contentScore += float64(maxTermMatches) * 5.0
+						}
+						for _, lineStr := range lines {
+							if len(trimmedQuery) >= 5 && strings.Contains(strings.ToLower(lineStr), lowerQuery) {
+								contentScore += 25.0
+								break
+							}
+						}
+					}
+
+					// Slicing window around best matching line
+					windowSize := 60
+					halfWin := windowSize / 2
+					sIdx := bestLineIdx - halfWin
+					if sIdx < 0 {
+						sIdx = 0
+					}
+					eIdx := sIdx + windowSize
+					if eIdx > totalLines {
+						eIdx = totalLines
+						sIdx = eIdx - windowSize
+						if sIdx < 0 {
+							sIdx = 0
+						}
+					}
+
+					startLine = sIdx + 1
+					endLine = eIdx
+					if endLine < startLine {
+						endLine = startLine
+					}
+
+					snippetLines := lines[sIdx:eIdx]
+					content = strings.Join(snippetLines, "\n")
+
+					ext := strings.ToLower(filepath.Ext(f.RelativePath))
+					base := strings.ToLower(filepath.Base(f.RelativePath))
+					if ext == ".md" || ext == ".rst" || ext == ".txt" {
+						evidenceType = models.EvidenceTypeDocumentation
+					} else if ext == ".yml" || ext == ".yaml" || ext == ".json" || base == "requirements.txt" || base == ".env.example" {
+						evidenceType = models.EvidenceTypeDependency
+					} else {
+						evidenceType = models.EvidenceTypeCodeSnippet
+					}
+				}
+			}
+		}
+
+		rawScore := pathScore
+		if contentScore > 0 {
+			if pathScore > 0 {
+				rawScore = pathScore + contentScore
+			} else {
+				rawScore = contentScore
+			}
+		}
+
 		if rawScore <= 0 {
 			continue
 		}
 
 		item := &models.EvidenceItem{
 			RepositoryID:  scope.RepositoryID,
-			Type:          models.EvidenceTypeDependency,
+			Type:          evidenceType,
 			FileID:        f.ID,
 			RelativePath:  f.RelativePath,
-			Location:      models.Location{StartLine: 1, EndLine: 1},
-			Content:       "file " + f.RelativePath + " (" + f.Language + ")",
+			Location:      models.Location{StartLine: startLine, EndLine: endLine},
+			Content:       content,
 			RetrieverType: "LEXICAL",
 			RawScore:      rawScore,
 			Metadata: map[string]string{
@@ -129,14 +260,6 @@ func (r *LexicalRetriever) Retrieve(
 }
 
 // calculateSymbolScore evaluates a static symbol against query terms and intent heuristics.
-// Lexical Ranking Strategy:
-// - Exact Qualified Name Match: 100.0
-// - Exact Symbol Name Match: 80.0
-// - Prefix Symbol Name Match: 60.0
-// - Identifier Substring Match: 40.0
-// Intent Boosts:
-// - SYMBOL_LOOKUP: +30.0 for exact/qualified matches
-// - CALLER_QUERY / CALLEE_QUERY: +25.0 for FUNCTION / METHOD kinds
 func (r *LexicalRetriever) calculateSymbolScore(sym *models.Symbol, query, lowerQuery, intent string) float64 {
 	lowerName := strings.ToLower(sym.Name)
 	lowerQual := strings.ToLower(sym.QualifiedName)
@@ -174,7 +297,15 @@ func (r *LexicalRetriever) calculateSymbolScore(sym *models.Symbol, query, lower
 		return 0.0
 	}
 
-	// Intent-based rank adjustments
+	// Intent & Execution-Flow rank adjustments
+	if isStartupQuery(lowerQuery) || isExecutionFlowQuery(lowerQuery) || intent == IntentRepoOverview || intent == IntentArchitectureQuery || intent == IntentTrace {
+		relLower := strings.ToLower(sym.RelativePath)
+		nameLower := strings.ToLower(sym.Name)
+		if nameLower == "main" || nameLower == "ensure_environment" || nameLower == "check_ollama_server" || nameLower == "init" || nameLower == "run" || relLower == "run.py" || relLower == "main.go" || relLower == "main.py" || relLower == "app.py" {
+			score += 45.0
+		}
+	}
+
 	switch intent {
 	case IntentSymbolLookup:
 		if score >= 80.0 {
@@ -194,44 +325,65 @@ func (r *LexicalRetriever) calculateSymbolScore(sym *models.Symbol, query, lower
 }
 
 // calculateFileScore evaluates a file path against query terms and intent heuristics.
-// Lexical Ranking Strategy:
-// - Exact Path Match: 50.0
-// - Path Substring / Package Match: 30.0
-// Intent Boosts:
-// - DEPENDENCY_QUERY / ARCHITECTURE_QUERY: +35.0 for file/module matches
 func (r *LexicalRetriever) calculateFileScore(f *models.FileManifestItem, query, lowerQuery, intent string) float64 {
 	lowerPath := strings.ToLower(f.RelativePath)
 	baseName := strings.ToLower(filepath.Base(f.RelativePath))
+	ext := strings.ToLower(filepath.Ext(f.RelativePath))
 	score := 0.0
 
 	if query == f.RelativePath || lowerQuery == lowerPath || lowerQuery == baseName {
-		score = 50.0
+		score = 60.0
 	} else if strings.Contains(lowerPath, lowerQuery) {
-		score = 30.0
+		score = 40.0
 	}
 
-	if score == 0.0 {
-		words := strings.FieldsFunc(lowerQuery, func(r rune) bool {
-			return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '/' || r == '.')
-		})
-		for _, w := range words {
-			if len(w) < 3 {
-				continue
-			}
-			if strings.Contains(lowerPath, w) || strings.Contains(baseName, w) {
-				score = 30.0
-				break
-			}
+	// Term matching against file path
+	words := strings.FieldsFunc(lowerQuery, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '/' || r == '.')
+	})
+	matchedTerms := 0
+	for _, w := range words {
+		if len(w) < 3 || isStopWord(w) {
+			continue
+		}
+		if baseName == w || strings.TrimSuffix(baseName, ext) == w {
+			score += 45.0
+			matchedTerms++
+		} else if strings.Contains(baseName, w) || strings.Contains(lowerPath, w) {
+			score += 25.0
+			matchedTerms++
 		}
 	}
 
-	if score == 0.0 {
+	// Intent-aware repository-level purpose/overview query matching
+	if intent == IntentArchitectureQuery {
+		if baseName == "readme.md" || baseName == "architecture.md" {
+			score += 35.0
+			matchedTerms++
+		} else if baseName == "main.go" || baseName == "run.py" || baseName == "app.py" || baseName == "app.java" || baseName == "index.ts" {
+			score += 25.0
+			matchedTerms++
+		}
+	}
+
+	// CRITICAL: If no query terms matched the file path or repository overview criteria, return 0.0
+	if matchedTerms == 0 && score == 0.0 {
 		return 0.0
+	}
+
+	// Executable source code boost for code implementation queries (ONLY if file already matched terms!)
+	isSourceCode := ext == ".py" || ext == ".ts" || ext == ".js" || ext == ".go" || ext == ".java"
+	wantsSource := strings.Contains(lowerQuery, "source") || strings.Contains(lowerQuery, "function") || strings.Contains(lowerQuery, "class") || strings.Contains(lowerQuery, "call") || strings.Contains(lowerQuery, "responsibil") || strings.Contains(lowerQuery, "implement") || strings.Contains(lowerQuery, "agent") || strings.Contains(lowerQuery, "workflow")
+
+	if isSourceCode && wantsSource && score > 0.0 {
+		score += 20.0
 	}
 
 	switch intent {
 	case IntentDependencyQuery, IntentArchitectureQuery:
-		score += 35.0
+		if score > 0.0 {
+			score += 15.0
+		}
 	}
 
 	return score

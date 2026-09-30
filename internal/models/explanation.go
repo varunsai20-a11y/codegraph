@@ -12,6 +12,11 @@ var (
 	ErrContradictoryState = errors.New("contradictory explanation response state")
 )
 
+type ChatMessage struct {
+	Role    string `json:"role"`    // "user" or "assistant"
+	Content string `json:"content"` // Message content text
+}
+
 // ExplanationRequest specifies the input criteria for generating a grounded AI code explanation.
 type ExplanationRequest struct {
 	RepositoryScope RepositoryScope   `json:"repository_scope"`
@@ -20,6 +25,7 @@ type ExplanationRequest struct {
 	StaticFlow      *StaticFlowResult `json:"static_flow,omitempty"`
 	NodeIDs         []string          `json:"node_ids,omitempty"`
 	EdgeIDs         []string          `json:"edge_ids,omitempty"`
+	History         []ChatMessage     `json:"history,omitempty"`
 	Budget          EvidenceBudget    `json:"budget"`
 	Provider        string            `json:"provider,omitempty"`
 	Model           string            `json:"model,omitempty"`
@@ -199,6 +205,7 @@ type ExplanationResponse struct {
 	Grounding                GroundingMetadata         `json:"grounding"`
 	Provider                 string                    `json:"provider,omitempty"`
 	Model                    string                    `json:"model,omitempty"`
+	ProviderMode             string                    `json:"provider_mode,omitempty"`
 	PromptTokens             int                       `json:"prompt_tokens,omitempty"`
 	CompletionTokens         int                       `json:"completion_tokens,omitempty"`
 	TotalTokens              int                       `json:"total_tokens,omitempty"`

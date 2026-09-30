@@ -82,7 +82,7 @@ func TestE2E_HTTPConcurrencyAndReindexingResilience(t *testing.T) {
 	}
 
 	mockProv := llm.NewMockLLMProvider("Main application entry point [E1].", nil)
-	lexRetriever := retrieval.NewLexicalRetriever(store)
+	lexRetriever := retrieval.NewLexicalRetriever(store, nil)
 	composer := retrieval.NewDefaultEvidenceComposer(lexRetriever, nil, store)
 	expSvc := llm.NewGroundedExplanationService(mockProv, nil, composer, nil)
 	server.SetExplanationService(expSvc)

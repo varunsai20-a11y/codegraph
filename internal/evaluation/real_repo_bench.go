@@ -129,7 +129,7 @@ func BenchmarkRealRepository(ctx context.Context, repoPath string, dbDir string)
 	}
 
 	scope, _ := models.NewRepositoryScope(repoID)
-	lexical := retrieval.NewLexicalRetriever(store)
+	lexical := retrieval.NewLexicalRetriever(store, nil)
 	semantic := retrieval.NewSemanticRetriever(vecStore, mockProvider)
 	graphRet := retrieval.NewGraphRetriever(store)
 	hybridCfg := retrieval.DefaultHybridRetrievalConfig()
