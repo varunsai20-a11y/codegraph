@@ -28,7 +28,7 @@ export class CodeGraphAPIClient {
     options?: RequestInit & { signal?: AbortSignal; timeoutMs?: number }
   ): Promise<T> {
     const controller = new AbortController();
-    const timeoutMs = options?.timeoutMs || 15000;
+    const timeoutMs = options?.timeoutMs || 60000;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     let signal = controller.signal;
@@ -189,6 +189,7 @@ export class CodeGraphAPIClient {
       method: "POST",
       body: JSON.stringify(payload),
       signal,
+      timeoutMs: 60000,
     });
   }
 
