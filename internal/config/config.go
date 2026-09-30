@@ -23,6 +23,9 @@ type Config struct {
 	DefaultExclusions  []string
 	SupportedLanguages []string
 	LLM                LLMProviderConfig
+	Gemini             LLMProviderConfig
+	Groq               LLMProviderConfig
+	LLMProviderOrder   []string
 }
 
 func loadEnvFile(filename string) {
@@ -97,16 +100,60 @@ func Load() *Config {
 	llmKey := os.Getenv("LLM_API_KEY")
 	llmEnd := os.Getenv("LLM_ENDPOINT")
 
+	// Build Gemini config
+	geminiKey := os.Getenv("GEMINI_API_KEY")
+	geminiModel := os.Getenv("LLM_MODEL")
+	if geminiModel == "" {
+		geminiModel = "gemini-3.8-flash"
+	}
+	geminiEnd := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", geminiModel)
+	geminiCfg := LLMProviderConfig{
+		Provider: "gemini",
+		Model:    geminiModel,
+		APIKey:   geminiKey,
+		Endpoint: geminiEnd,
+	}
+
+	// Build Groq config
+	groqKey := os.Getenv("GROQ_API_KEY")
+	groqModel := os.Getenv("GROQ_MODEL")
+	if groqModel == "" {
+		groqModel = "openai/gpt-oss-120b"
+	}
+	groqEnd := "https://api.groq.com/openai/v1/chat/completions"
+	groqCfg := LLMProviderConfig{
+		Provider: "groq",
+		Model:    groqModel,
+		APIKey:   groqKey,
+		Endpoint: groqEnd,
+	}
+
+	// Build LLM Provider Order
+	providerOrderStr := os.Getenv("LLM_PROVIDER_ORDER")
+	var providerOrder []string
+	if providerOrderStr != "" {
+		for _, p := range strings.Split(providerOrderStr, ",") {
+			trimmed := strings.ToLower(strings.TrimSpace(p))
+			if trimmed != "" {
+				providerOrder = append(providerOrder, trimmed)
+			}
+		}
+	}
+	if len(providerOrder) == 0 {
+		providerOrder = []string{"gemini", "groq"}
+	}
+
 	if llmProv == "" {
-		if os.Getenv("GEMINI_API_KEY") != "" {
+		if geminiKey != "" {
 			llmProv = "gemini"
-			llmKey = os.Getenv("GEMINI_API_KEY")
-			if llmModel == "" {
-				llmModel = "gemini-3.8-flash"
-			}
-			if llmEnd == "" {
-				llmEnd = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", llmModel)
-			}
+			llmKey = geminiKey
+			llmModel = geminiModel
+			llmEnd = geminiEnd
+		} else if groqKey != "" {
+			llmProv = "groq"
+			llmKey = groqKey
+			llmModel = groqModel
+			llmEnd = groqEnd
 		} else if os.Getenv("OPENAI_API_KEY") != "" {
 			llmProv = "openai"
 			llmKey = os.Getenv("OPENAI_API_KEY")
@@ -116,31 +163,6 @@ func Load() *Config {
 			if llmEnd == "" {
 				llmEnd = "https://api.openai.com/v1/chat/completions"
 			}
-		} else if os.Getenv("ANTHROPIC_API_KEY") != "" {
-			llmProv = "anthropic"
-			llmKey = os.Getenv("ANTHROPIC_API_KEY")
-			if llmModel == "" {
-				llmModel = "claude-3-5-sonnet-20240620"
-			}
-			if llmEnd == "" {
-				llmEnd = "https://api.anthropic.com/v1/messages"
-			}
-		} else if os.Getenv("OLLAMA_BASE_URL") != "" {
-			llmProv = "ollama"
-			if llmModel == "" {
-				llmModel = "qwen2.5:3b"
-			}
-			llmEnd = strings.TrimSuffix(os.Getenv("OLLAMA_BASE_URL"), "/") + "/api/chat"
-		}
-	} else if llmProv == "gemini" {
-		if llmKey == "" {
-			llmKey = os.Getenv("GEMINI_API_KEY")
-		}
-		if llmModel == "" {
-			llmModel = "gemini-3.8-flash"
-		}
-		if llmEnd == "" {
-			llmEnd = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", llmModel)
 		}
 	}
 
@@ -158,5 +180,8 @@ func Load() *Config {
 			APIKey:   llmKey,
 			Endpoint: llmEnd,
 		},
+		Gemini:           geminiCfg,
+		Groq:             groqCfg,
+		LLMProviderOrder: providerOrder,
 	}
 }

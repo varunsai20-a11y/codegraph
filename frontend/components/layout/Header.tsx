@@ -188,15 +188,14 @@ export const Header: React.FC = () => {
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
                 <span className="text-amber-400 font-bold">RETRIEVAL INSUFFICIENT</span>
               </>
-            ) : explanationResult?.provider_mode === "DETERMINISTIC_SUMMARY" ? (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                <span className="text-amber-300 font-bold">DETERMINISTIC FALLBACK</span>
-              </>
             ) : (
               <>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                <span className="text-emerald-400 font-bold">GEMINI GROUNDED</span>
+                <span className="text-emerald-400 font-bold">
+                  {explanationResult?.provider
+                    ? `${explanationResult.provider.toUpperCase()} GROUNDED`
+                    : "GEMINI GROUNDED"}
+                </span>
               </>
             )}
           </div>
