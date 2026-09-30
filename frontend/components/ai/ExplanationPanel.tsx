@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { ExplanationEvidence, ChatThreadItem } from "@/lib/types";
+import { MarkdownRenderer } from "@/components/ui/MarkdownRenderer";
 import {
   Terminal,
   FileText,
@@ -200,13 +201,23 @@ export const ExplanationPanel: React.FC = () => {
                 </div>
 
                 {/* Grounded Technical Answer */}
-                <div className="text-xs leading-relaxed whitespace-pre-wrap font-sans text-gray-200">
+                <div className="text-xs leading-relaxed font-sans text-gray-200">
                   {msg.isInsufficient ? (
                     <p className="text-amber-300 font-mono italic">
                       CodeGraph could not find enough repository information to answer this reliably.
                     </p>
                   ) : (
-                    formatCleanAnswer(msg.text)
+                    <MarkdownRenderer
+                      content={msg.text}
+                      onCitationClick={(label) => {
+                        const foundEv = msg.evidence?.find(
+                          (e) => e.label === label || e.id === label || e.stable_id === label
+                        );
+                        if (foundEv) {
+                          handleOpenSource(foundEv);
+                        }
+                      }}
+                    />
                   )}
                 </div>
 

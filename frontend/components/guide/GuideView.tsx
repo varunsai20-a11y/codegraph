@@ -1,6 +1,7 @@
 "use client";
 import React, { useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
+import { MarkdownRenderer } from "@/components/ui/MarkdownRenderer";
 import {
   Compass,
   Play,
@@ -280,24 +281,8 @@ export const GuideView: React.FC = () => {
 
             {currentStep ? (
               <div className="space-y-4">
-                <div className="text-xs text-gray-300 leading-relaxed font-sans space-y-2">
-                  {currentStep.description.split("\n\n").map((paragraph, pIdx) => (
-                    <p key={pIdx}>
-                      {paragraph.split(/(`[^`]+`)/g).map((part, idx) => {
-                        if (part.startsWith("`") && part.endsWith("`")) {
-                          return (
-                            <code
-                              key={idx}
-                              className="bg-cyan-950/60 text-cyan-300 border border-cyan-500/30 px-1.5 py-0.5 mx-0.5 rounded text-[11px] font-mono font-bold inline-block"
-                            >
-                              {part.slice(1, -1)}
-                            </code>
-                          );
-                        }
-                        return <span key={idx}>{part}</span>;
-                      })}
-                    </p>
-                  ))}
+                <div className="text-xs text-gray-300 leading-relaxed font-sans">
+                  <MarkdownRenderer content={currentStep.description} />
                 </div>
 
                 {/* Evidence Package Reference */}
