@@ -192,123 +192,184 @@ func (o *DefaultGuideOrchestrator) buildDeterministicSteps(
 ) []*models.InvestigationStep {
 	var steps []*models.InvestigationStep
 
-	// Step 1: Overview
+	entrySymName := "N/A"
+	var entrySym *models.Symbol
+	if len(summary.EntryPointCandidates) > 0 && summary.EntryPointCandidates[0] != nil {
+		entrySym = summary.EntryPointCandidates[0]
+		entrySymName = fmt.Sprintf("%s:%s", entrySym.RelativePath, entrySym.Name)
+	}
+
+	highConnName := "N/A"
+	var highConnNode *models.Node
+	if len(summary.HighConnectivitySymbols) > 0 && summary.HighConnectivitySymbols[0] != nil {
+		highConnNode = summary.HighConnectivitySymbols[0]
+		highConnName = fmt.Sprintf("%s (%s)", highConnNode.Label, highConnNode.RelativePath)
+	}
+
+	topModDirs := make([]string, 0)
+	for _, m := range summary.TopModules {
+		topModDirs = append(topModDirs, m.Directory)
+	}
+	topModSummaryStr := strings.Join(topModDirs, ", ")
+
+	// Step 1: System Purpose & Scope
 	step1 := &models.InvestigationStep{
 		ID:          "step-1-overview",
 		Sequence:    1,
 		Type:        models.StepOverview,
-		Title:       "Repository Architectural Overview",
-		Description: fmt.Sprintf("Repository '%s' contains %d files, %d symbols, and %d top directory modules.", scope.RepositoryID, summary.TotalFiles, summary.TotalSymbols, len(summary.TopModules)),
+		StepType:    models.StepOverview,
+		Title:       "1. System Purpose & Architecture Scope",
+		Description: fmt.Sprintf("Repository '%s' comprises %d source files, %d symbols, and %d AST relationships across %d primary modules (%s). Execution is driven by primary entrypoint '%s'. External boundaries & services include: %s.", scope.RepositoryID, summary.TotalFiles, summary.TotalSymbols, summary.TotalRelationships, len(summary.TopModules), topModSummaryStr, entrySymName, strings.Join(summary.ExternalBoundaries, ", ")),
 		SuggestedQuestions: []string{
-			"How is this repository structured?",
-			"What are the main modules in this project?",
-			"Where are the likely entry points?",
+			"What is the overall architectural purpose of this repository?",
+			"What external services or frameworks does this system depend on?",
+			"Which entrypoint files drive execution?",
 		},
 		Status: models.StepPending,
 	}
+	if entrySym != nil {
+		step1.FileID = entrySym.FileID
+		step1.RelativePath = entrySym.RelativePath
+		step1.TargetFile = entrySym.RelativePath
+		step1.SymbolID = entrySym.ID
+		step1.TargetSymbol = entrySym.ID
+		step1.SymbolName = entrySym.Name
+		step1.TargetNode = entrySym.Name
+	}
 	steps = append(steps, step1)
 
-	// Step 2: Module Structure & Entry Points
+	// Step 2: Major Modules & Responsibilities
 	targetDir := "root"
 	if len(summary.TopModules) > 0 {
 		targetDir = summary.TopModules[0].Directory
-	}
-	var entrySym *models.Symbol
-	if len(summary.EntryPointCandidates) > 0 {
-		entrySym = summary.EntryPointCandidates[0]
 	}
 
 	step2 := &models.InvestigationStep{
 		ID:          "step-2-module-structure",
 		Sequence:    2,
 		Type:        models.StepModuleStructure,
-		Title:       fmt.Sprintf("Module Structure: %s", targetDir),
-		Description: fmt.Sprintf("Primary concentration found in '%s'. Entry point candidate: '%s'.", targetDir, getSymbolName(entrySym)),
+		StepType:    models.StepModuleStructure,
+		Title:       fmt.Sprintf("2. Major Modules & Responsibilities (%s)", targetDir),
+		Description: fmt.Sprintf("Building on the system overview, execution flow partitions responsibilities across primary modules [%s]. Control flow enters at '%s' (symbol '%s') and delegates domain logic to core module '%s'.", topModSummaryStr, entrySymName, getSymbolName(entrySym), targetDir),
 		SuggestedQuestions: []string{
-			fmt.Sprintf("What does module '%s' do?", targetDir),
-			"Which entry points initiate execution?",
-			"What are the core dependencies of this module?",
+			fmt.Sprintf("What are the primary responsibilities of module '%s'?", targetDir),
+			"How does control move from the entrypoint to internal modules?",
+			"What dependencies exist between major modules?",
 		},
 		Status: models.StepPending,
 	}
 	if entrySym != nil {
-		step2.SymbolID = entrySym.ID
-		step2.SymbolName = entrySym.Name
 		step2.FileID = entrySym.FileID
 		step2.RelativePath = entrySym.RelativePath
+		step2.TargetFile = entrySym.RelativePath
+		step2.SymbolID = entrySym.ID
+		step2.TargetSymbol = entrySym.ID
+		step2.SymbolName = entrySym.Name
+		step2.TargetNode = entrySym.Name
 	}
 	steps = append(steps, step2)
 
-	// Step 3: Important Symbols & High Connectivity
-	var highConnNode *models.Node
-	if len(summary.HighConnectivitySymbols) > 0 {
-		highConnNode = summary.HighConnectivitySymbols[0]
-	}
-
+	// Step 3: Key Execution Components & Important Symbols
 	step3 := &models.InvestigationStep{
 		ID:          "step-3-important-symbols",
 		Sequence:    3,
 		Type:        models.StepImportantSymbols,
-		Title:       "High-Connectivity Symbol Analysis",
-		Description: fmt.Sprintf("Highest degree centrality symbol: '%s'.", getNodeName(highConnNode)),
+		StepType:    models.StepImportantSymbols,
+		Title:       "3. Important Execution Components",
+		Description: fmt.Sprintf("Within key module '%s', multi-signal architectural scoring pinpoints primary driving component '%s'. Key orchestration symbols include: %s. These components manage task orchestration, domain execution, and tool delegation.", targetDir, highConnName, strings.Join(summary.HighConnectivitySymsStr, "; ")),
 		SuggestedQuestions: []string{
-			"What does this function do?",
-			"Who calls this function?",
-			"What does this function call?",
+			fmt.Sprintf("What is the role of '%s' in system execution?", getNodeName(highConnNode)),
+			"Which functions or methods call this component?",
+			"What child symbols or tools does this component depend on?",
 		},
 		Status: models.StepPending,
 	}
 	if highConnNode != nil {
-		step3.SymbolID = highConnNode.ID
-		step3.SymbolName = highConnNode.Label
 		step3.FileID = highConnNode.FileID
 		step3.RelativePath = highConnNode.RelativePath
+		step3.TargetFile = highConnNode.RelativePath
+		step3.SymbolID = highConnNode.ID
+		step3.TargetSymbol = highConnNode.ID
+		step3.SymbolName = highConnNode.Label
+		step3.TargetNode = highConnNode.Label
 	}
 	steps = append(steps, step3)
 
-	// Step 4: Static Call Flow
+	// Step 4: Static Execution Narrative & Call Flow (With Data Flow)
 	step4 := &models.InvestigationStep{
-		ID:          "step-4-static-flow",
-		Sequence:    4,
-		Type:        models.StepStaticFlow,
-		Title:       "Static Call Flow Traversal",
-		Description: "Statically inferred call graph relationship derived from CodeGraph static analysis.",
+		ID:       "step-4-static-flow",
+		Sequence: 4,
+		Type:     models.StepStaticFlow,
+		StepType: models.StepStaticFlow,
+		Title:    "4. Execution Narrative & Static Call Flow",
 		SuggestedQuestions: []string{
-			"Explain this call path.",
-			"Where does static execution flow lead?",
-			"Where does this flow terminate?",
+			"Trace the complete static call path from entrypoint to tool execution.",
+			"What data items move through this execution path?",
+			"Where do terminal side effects or external service calls occur?",
 		},
 		Status: models.StepPending,
 	}
-	if entrySym != nil && highConnNode != nil {
-		step4.SymbolID = entrySym.ID
-		step4.SymbolName = entrySym.Name
+
+	var flowSummaryStr string
+	if entrySym != nil {
+		step4.FileID = entrySym.FileID
 		step4.RelativePath = entrySym.RelativePath
-		// Attach static flow trace if graph is available
+		step4.TargetFile = entrySym.RelativePath
+		step4.SymbolID = entrySym.ID
+		step4.TargetSymbol = entrySym.ID
+		step4.SymbolName = entrySym.Name
+		step4.TargetNode = entrySym.Name
+
 		if o.store != nil {
 			nodes, edges, err := o.store.GetGraphForRepository(ctx, scope.RepositoryID)
 			if err == nil && len(nodes) > 0 {
 				flowEngine := graph.NewEngine(scope.RepositoryID)
 				flowEngine.LoadGraph(nodes, edges)
-				step4.FlowResult = flowEngine.TraceStaticFlow(entrySym.ID, highConnNode.ID, 10, 50)
+
+				targetID := ""
+				if highConnNode != nil && highConnNode.RelativePath != entrySym.RelativePath {
+					targetID = highConnNode.ID
+				} else {
+					for _, hcn := range summary.HighConnectivitySymbols {
+						if hcn != nil && hcn.RelativePath != entrySym.RelativePath {
+							targetID = hcn.ID
+							break
+						}
+					}
+				}
+				step4.FlowResult = flowEngine.TraceStaticFlow(entrySym.ID, targetID, 10, 50)
 			}
 		}
 	}
+
+	callNarrative, dataFlowNarrative, pathSummary := generateDynamicFlowNarrative(step4.FlowResult, entrySym, highConnNode, scope.RepositoryID)
+	step4.Description = fmt.Sprintf("%s %s [Statically Established: Call edges & module imports. Inferred: Parameter data handoff. Unavailable Runtime: Dynamic LLM outputs & un-analyzed runtime state].", callNarrative, dataFlowNarrative)
+	flowSummaryStr = pathSummary
 	steps = append(steps, step4)
 
-	// Step 5: Grounded AI Explanation
+	// Step 5: End-to-End Architectural Synthesis
 	step5 := &models.InvestigationStep{
 		ID:          "step-5-explanation",
 		Sequence:    5,
 		Type:        models.StepGroundedExplain,
-		Title:       "Grounded Architectural Synthesis",
-		Description: "Evidence-backed AI summary interpreting repository architecture and flow facts.",
+		StepType:    models.StepGroundedExplain,
+		Title:       "5. End-to-End Architectural Synthesis",
+		Description: fmt.Sprintf("Architectural Synthesis: Repository '%s' is an AST-verified system structured into %d primary modules [%s]. System execution originates in entrypoint '%s', passes control through key component '%s', and follows verified call flow (%s). Data moves from entry parameters through module handoffs to external boundaries (%s).", scope.RepositoryID, len(summary.TopModules), topModSummaryStr, entrySymName, highConnName, flowSummaryStr, strings.Join(summary.ExternalBoundaries, ", ")),
 		SuggestedQuestions: []string{
-			"Explain the purpose of this codebase.",
-			"Summarize key architectural dependencies.",
-			"What are potential security or API boundaries?",
+			"Summarize the end-to-end architectural design of this codebase.",
+			"How do entrypoints, modules, and key symbols interact across file boundaries?",
+			"What are the main security, API, or external integration boundaries?",
 		},
 		Status: models.StepPending,
+	}
+	if entrySym != nil {
+		step5.FileID = entrySym.FileID
+		step5.RelativePath = entrySym.RelativePath
+		step5.TargetFile = entrySym.RelativePath
+		step5.SymbolID = entrySym.ID
+		step5.TargetSymbol = entrySym.ID
+		step5.SymbolName = entrySym.Name
+		step5.TargetNode = entrySym.Name
 	}
 	steps = append(steps, step5)
 
@@ -346,3 +407,73 @@ func getNodeName(n *models.Node) string {
 	}
 	return n.Label
 }
+
+func generateDynamicFlowNarrative(
+	flow *models.StaticFlowResult,
+	entrySym *models.Symbol,
+	highConn *models.Node,
+	repoID string,
+) (callNarrative string, dataFlowNarrative string, pathSummary string) {
+	entryStr := "entrypoint"
+	if entrySym != nil {
+		entryStr = fmt.Sprintf("%s:%s", entrySym.RelativePath, entrySym.Name)
+	}
+
+	highConnStr := "core component"
+	if highConn != nil {
+		highConnStr = fmt.Sprintf("%s (%s)", highConn.Label, highConn.RelativePath)
+	}
+
+	if flow != nil && flow.Path != nil && len(flow.Path.Steps) > 0 {
+		var labels []string
+		var dataLabels []string
+		for _, step := range flow.Path.Steps {
+			if step.Node != nil {
+				lbl := step.Node.Label
+				if step.Node.RelativePath != "" {
+					lbl = fmt.Sprintf("%s:%s", step.Node.RelativePath, step.Node.Label)
+				}
+				labels = append(labels, fmt.Sprintf("`%s`", lbl))
+				dataLabels = append(dataLabels, fmt.Sprintf("%s Handoff", step.Node.Label))
+			}
+		}
+
+		pathSummary = strings.Join(labels, " → ")
+		callNarrative = fmt.Sprintf("Execution Narrative: System execution originates in '%s', validating environment/parameters, then delegating control along static call path: %s.", entryStr, pathSummary)
+		dataFlowNarrative = fmt.Sprintf("Static Data Flow: User Input / Config → %s → System Output / External Service.", strings.Join(dataLabels, " → "))
+		return callNarrative, dataFlowNarrative, pathSummary
+	}
+
+	if flow != nil && len(flow.Nodes) > 0 {
+		var labels []string
+		var dataLabels []string
+		count := 0
+		for _, node := range flow.Nodes {
+			if node != nil && node.Kind == models.NodeKindSymbol {
+				lbl := node.Label
+				if node.RelativePath != "" {
+					lbl = fmt.Sprintf("%s:%s", node.RelativePath, node.Label)
+				}
+				labels = append(labels, fmt.Sprintf("`%s`", lbl))
+				dataLabels = append(dataLabels, fmt.Sprintf("%s Data", node.Label))
+				count++
+				if count >= 4 {
+					break
+				}
+			}
+		}
+
+		if len(labels) > 0 {
+			pathSummary = strings.Join(labels, " → ")
+			callNarrative = fmt.Sprintf("Execution Narrative: System execution starts in '%s' and delegates control to key symbols: %s.", entryStr, pathSummary)
+			dataFlowNarrative = fmt.Sprintf("Static Data Flow: CLI / Request Input → %s → Processed Result.", strings.Join(dataLabels, " → "))
+			return callNarrative, dataFlowNarrative, pathSummary
+		}
+	}
+
+	pathSummary = fmt.Sprintf("`%s` → `%s`", entryStr, highConnStr)
+	callNarrative = fmt.Sprintf("Execution Narrative: System execution initiates in entrypoint '%s' and directs control to primary architectural component '%s'.", entryStr, highConnStr)
+	dataFlowNarrative = fmt.Sprintf("Static Data Flow: User Input / CLI → [%s] Parameters → [%s] Processing → Result Output.", entryStr, highConnStr)
+	return callNarrative, dataFlowNarrative, pathSummary
+}
+

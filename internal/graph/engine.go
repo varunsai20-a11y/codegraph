@@ -2,7 +2,9 @@ package graph
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -384,7 +386,7 @@ func (e *Engine) GetOverviewGraph(params QueryParams) ([]*models.Node, []*models
 	nodeMap := make(map[string]*models.Node)
 	nodeMap[rootNode.ID] = rootNode
 
-	// Gather file and external module nodes connected to rootNode or top imports
+	// Gather nodes connected to rootNode or top imports
 	var candidateNodes []*models.Node
 	for _, n := range e.nodes {
 		if n.ID == rootNode.ID {
@@ -393,9 +395,7 @@ func (e *Engine) GetOverviewGraph(params QueryParams) ([]*models.Node, []*models
 		if len(params.NodeTypes) > 0 && !params.NodeTypes[n.Kind] {
 			continue
 		}
-		if n.Kind == models.NodeKindRepository || n.Kind == models.NodeKindFile || n.Kind == models.NodeKindExternalModule {
-			candidateNodes = append(candidateNodes, n)
-		}
+		candidateNodes = append(candidateNodes, n)
 	}
 	sort.Slice(candidateNodes, func(i, j int) bool { return candidateNodes[i].ID < candidateNodes[j].ID })
 
@@ -886,6 +886,199 @@ func (e *Engine) Stats() (nodeCount, edgeCount int) {
 		totalEdges += len(list)
 	}
 	return len(e.nodes), totalEdges
+}
+
+// GetArchitectureFlow clusters nodes into top-level modules, synthesizes cross-module edges, and generates a Mermaid.js diagram.
+func (e *Engine) GetArchitectureFlow() *models.ArchitectureDiagram {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	moduleMap := make(map[string]*models.ArchitectureModule)
+	nodeToModule := make(map[string]string)
+
+	getOrCreateModule := func(modID, name, path string, category models.ModuleCategory) *models.ArchitectureModule {
+		if mod, found := moduleMap[modID]; found {
+			return mod
+		}
+		mod := &models.ArchitectureModule{
+			ID:       modID,
+			Name:     name,
+			Path:     path,
+			Category: category,
+			NodeIDs:  []string{},
+		}
+		moduleMap[modID] = mod
+		return mod
+	}
+
+	for _, node := range e.nodes {
+		if node.Kind == models.NodeKindRepository {
+			continue
+		}
+
+		var modID, name, path string
+		var cat models.ModuleCategory
+
+		if node.Kind == models.NodeKindExternalModule {
+			modID = "external"
+			name = "External Modules"
+			path = "external"
+			cat = models.CategoryExternal
+		} else {
+			relPath := node.RelativePath
+			if relPath == "" {
+				relPath = "."
+			}
+			relPath = filepath.ToSlash(relPath)
+			parts := strings.Split(relPath, "/")
+
+			if len(parts) <= 1 || parts[0] == "." {
+				modID = "root"
+				name = "Root Workspace"
+				path = "."
+				cat = models.CategoryEntrypoint
+			} else {
+				if (parts[0] == "internal" || parts[0] == "pkg" || parts[0] == "src" || parts[0] == "lib" || parts[0] == "app" || parts[0] == "components" || parts[0] == "services") && len(parts) >= 2 {
+					modID = parts[0] + "/" + parts[1]
+				} else {
+					modID = parts[0]
+				}
+				name = modID
+				path = modID
+
+				lowerMod := strings.ToLower(modID)
+				if strings.HasPrefix(lowerMod, "cmd") || strings.HasPrefix(lowerMod, "main") || strings.HasPrefix(lowerMod, "app") || strings.HasPrefix(lowerMod, "frontend") || strings.HasPrefix(lowerMod, "pages") {
+					cat = models.CategoryEntrypoint
+				} else if strings.Contains(lowerMod, "storage") || strings.Contains(lowerMod, "db") || strings.Contains(lowerMod, "database") || strings.Contains(lowerMod, "vector") || strings.Contains(lowerMod, "models") || strings.Contains(lowerMod, "repository") {
+					cat = models.CategoryStorage
+				} else {
+					cat = models.CategoryService
+				}
+			}
+		}
+
+		mod := getOrCreateModule(modID, name, path, cat)
+		mod.NodeIDs = append(mod.NodeIDs, node.ID)
+		nodeToModule[node.ID] = modID
+
+		if node.Kind == models.NodeKindFile {
+			mod.FileCount++
+		} else if node.Kind == models.NodeKindSymbol {
+			mod.SymbolCount++
+		}
+	}
+
+	// Synthesize cross-module edges
+	edgeMap := make(map[string]*models.ArchitectureEdge)
+	for _, edges := range e.outgoingEdges {
+		for _, ed := range edges {
+			srcModID, srcOk := nodeToModule[ed.SourceID]
+			tgtModID, tgtOk := nodeToModule[ed.TargetID]
+
+			if !srcOk || !tgtOk || srcModID == tgtModID {
+				continue
+			}
+
+			edgeKey := fmt.Sprintf("%s->%s", srcModID, tgtModID)
+			archEdge, exists := edgeMap[edgeKey]
+			if !exists {
+				archEdge = &models.ArchitectureEdge{
+					ID:           fmt.Sprintf("aedge:%s->%s", srcModID, tgtModID),
+					SourceModule: srcModID,
+					TargetModule: tgtModID,
+					Kinds:        []string{},
+				}
+				edgeMap[edgeKey] = archEdge
+			}
+			archEdge.InteractionCount++
+
+			kindStr := string(ed.Kind)
+			foundKind := false
+			for _, k := range archEdge.Kinds {
+				if k == kindStr {
+					foundKind = true
+					break
+				}
+			}
+			if !foundKind {
+				archEdge.Kinds = append(archEdge.Kinds, kindStr)
+			}
+		}
+	}
+
+	var sortedEdges []*models.ArchitectureEdge
+	for _, ed := range edgeMap {
+		ed.Label = fmt.Sprintf("%s (%d)", strings.Join(ed.Kinds, ", "), ed.InteractionCount)
+		sortedEdges = append(sortedEdges, ed)
+	}
+	sort.Slice(sortedEdges, func(i, j int) bool {
+		return sortedEdges[i].ID < sortedEdges[j].ID
+	})
+
+	var sortedModules []*models.ArchitectureModule
+	for _, m := range moduleMap {
+		sortedModules = append(sortedModules, m)
+	}
+	sort.Slice(sortedModules, func(i, j int) bool {
+		return sortedModules[i].ID < sortedModules[j].ID
+	})
+
+	// Generate Mermaid.js Code
+	var mermaidBuf strings.Builder
+	mermaidBuf.WriteString("graph TD\n")
+
+	catModules := make(map[models.ModuleCategory][]*models.ArchitectureModule)
+	for _, m := range sortedModules {
+		catModules[m.Category] = append(catModules[m.Category], m)
+	}
+
+	catTitles := map[models.ModuleCategory]string{
+		models.CategoryEntrypoint: "Entrypoints & Interfaces",
+		models.CategoryService:    "Services & Core Business Logic",
+		models.CategoryStorage:    "Database & Storage Engine",
+		models.CategoryExternal:   "External Modules & Libraries",
+	}
+
+	catOrder := []models.ModuleCategory{
+		models.CategoryEntrypoint,
+		models.CategoryService,
+		models.CategoryStorage,
+		models.CategoryExternal,
+	}
+
+	sanitizeID := func(raw string) string {
+		r := strings.NewReplacer("/", "_", "-", "_", ".", "_", " ", "_")
+		return "mod_" + r.Replace(raw)
+	}
+
+	for _, cat := range catOrder {
+		mods := catModules[cat]
+		if len(mods) == 0 {
+			continue
+		}
+		title := catTitles[cat]
+		mermaidBuf.WriteString(fmt.Sprintf("    subgraph %s [\"%s\"]\n", cat, title))
+		for _, m := range mods {
+			mID := sanitizeID(m.ID)
+			mermaidBuf.WriteString(fmt.Sprintf("        %s[\"%s<br/><small>%d files, %d symbols</small>\"]\n", mID, m.Name, m.FileCount, m.SymbolCount))
+		}
+		mermaidBuf.WriteString("    end\n")
+	}
+
+	for _, ed := range sortedEdges {
+		srcID := sanitizeID(ed.SourceModule)
+		tgtID := sanitizeID(ed.TargetModule)
+		mermaidBuf.WriteString(fmt.Sprintf("    %s -->|\"%s\"| %s\n", srcID, ed.Label, tgtID))
+	}
+
+	return &models.ArchitectureDiagram{
+		RepositoryID: e.repoID,
+		Modules:      sortedModules,
+		Edges:        sortedEdges,
+		MermaidCode:  mermaidBuf.String(),
+		TotalModules: len(sortedModules),
+		TotalEdges:   len(sortedEdges),
+	}
 }
 
 var _ = fmt.Sprintf

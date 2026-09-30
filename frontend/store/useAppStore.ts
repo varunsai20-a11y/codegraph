@@ -12,6 +12,9 @@ import {
   Investigation,
   InvestigationStep,
   InvestigationRequest,
+  ArchitectureDiagram,
+  ChatMessage,
+  ChatThreadItem,
 } from "@/lib/types";
 import { apiClient } from "@/lib/api-client";
 
@@ -23,6 +26,7 @@ let graphAbortController: AbortController | null = null;
 let flowAbortController: AbortController | null = null;
 let explainAbortController: AbortController | null = null;
 let guideAbortController: AbortController | null = null;
+let archAbortController: AbortController | null = null;
 
 interface AppState {
   repositories: Repository[];
@@ -48,6 +52,12 @@ interface AppState {
   expandedNodeIDs: Set<string>;
   isLoadingGraph: boolean;
   graphError: string | null;
+
+  // GitDiagram Architecture State
+  graphViewMode: "ARCHITECTURE" | "DETAILED";
+  architectureDiagram: ArchitectureDiagram | null;
+  isLoadingArchitecture: boolean;
+  architectureError: string | null;
 
   // C5 Static Flow State
   flowResult: StaticFlowResult | null;
@@ -77,6 +87,8 @@ interface AppState {
   setGraphNodeTypesFilter: (types: Set<string>) => void;
   setGraphEdgeTypesFilter: (types: Set<string>) => void;
   setGraphNodeLimit: (limit: number) => void;
+  setGraphViewMode: (mode: "ARCHITECTURE" | "DETAILED") => void;
+  fetchArchitectureDiagram: (repoID: string) => Promise<void>;
 
   // C5 Flow Actions
   fetchStaticFlow: (
@@ -107,6 +119,7 @@ interface AppState {
 
   // C6 AI State
   explanationResult: ExplanationResponse | null;
+  chatMessages: ChatThreadItem[];
   isExplaining: boolean;
   explanationError: string | null;
 
@@ -116,6 +129,7 @@ interface AppState {
     opts?: { symbolId?: string; rootSymbol?: string; targetNode?: string; flow?: boolean }
   ) => Promise<void>;
   clearExplanation: () => void;
+  clearChatMessages: () => void;
   selectFileAndHighlight: (relativePath: string, line: number) => void;
 
   // C7 Guided Reverse Engineering State
@@ -167,10 +181,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     "EDGE_EXTENDS",
     "EDGE_IMPLEMENTS",
   ]),
-  graphNodeLimit: 20,
+  graphNodeLimit: 25,
   expandedNodeIDs: new Set<string>(),
   isLoadingGraph: false,
   graphError: null,
+
+  graphViewMode: "ARCHITECTURE",
+  architectureDiagram: null,
+  isLoadingArchitecture: false,
+  architectureError: null,
 
   isLoadingRepos: false,
   isLoadingManifest: false,
@@ -187,6 +206,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // C6 AI Defaults
   explanationResult: null,
+  chatMessages: [],
   isExplaining: false,
   explanationError: null,
 
@@ -219,9 +239,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       if (active) {
         get().fetchFileManifest(active.id);
-        get().fetchGraph(active.id, { scope: "OVERVIEW", node_limit: 20 });
+        get().fetchGraph(active.id, { scope: "OVERVIEW", node_limit: get().graphNodeLimit, limit: get().graphNodeLimit });
+        get().fetchArchitectureDiagram(active.id);
       } else {
-        set({ fileManifest: [], selectedPath: null, sourceContent: null, graphNodes: [], graphEdges: [] });
+        set({ fileManifest: [], selectedPath: null, sourceContent: null, graphNodes: [], graphEdges: [], architectureDiagram: null });
       }
     } catch (err: any) {
       set({
@@ -248,6 +269,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       flowAbortController.abort();
       flowAbortController = null;
     }
+    if (archAbortController) {
+      archAbortController.abort();
+      archAbortController = null;
+    }
 
     const repos = get().repositories;
     const active = repos.find((r) => r.id === id) || null;
@@ -267,6 +292,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       graphEdges: [],
       graphScope: "OVERVIEW",
       expandedNodeIDs: new Set<string>(),
+      architectureDiagram: null,
+      chatMessages: [],
       flowResult: null,
       flowRootNodeID: null,
       flowTargetNodeID: null,
@@ -274,13 +301,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       manifestError: null,
       sourceError: null,
       graphError: null,
+      architectureError: null,
       flowError: null,
     });
 
     if (active) {
       await Promise.all([
         get().fetchFileManifest(id),
-        get().fetchGraph(id, { scope: "OVERVIEW", node_limit: 20 }),
+        get().fetchGraph(id, { scope: "OVERVIEW", node_limit: get().graphNodeLimit, limit: get().graphNodeLimit }),
+        get().fetchArchitectureDiagram(id),
       ]);
     }
   },
@@ -452,12 +481,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       if (get().activeRepoID !== repoID) return;
 
-      const nextExpanded = new Set<string>();
+      const existingNodesMap = new Map(get().graphNodes.map((n) => [n.id, n]));
+      (res.nodes || []).forEach((n) => existingNodesMap.set(n.id, n));
+      const mergedNodes = Array.from(existingNodesMap.values());
+
+      const existingEdgesMap = new Map(get().graphEdges.map((e) => [e.id, e]));
+      (res.edges || []).forEach((e) => existingEdgesMap.set(e.id, e));
+      const mergedEdges = Array.from(existingEdgesMap.values());
+
+      const nextExpanded = new Set(get().expandedNodeIDs);
       nextExpanded.add(nodeID);
 
       set({
-        graphNodes: res.nodes,
-        graphEdges: res.edges,
+        graphNodes: mergedNodes,
+        graphEdges: mergedEdges,
         graphScope: "NEIGHBORHOOD",
         expandedNodeIDs: nextExpanded,
         selectedNodeID: nodeID,
@@ -475,9 +512,50 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setGraphScope: (scope) => set({ graphScope: scope }),
-  setGraphNodeTypesFilter: (types) => set({ graphNodeTypesFilter: new Set(types) }),
-  setGraphEdgeTypesFilter: (types) => set({ graphEdgeTypesFilter: new Set(types) }),
-  setGraphNodeLimit: (limit) => set({ graphNodeLimit: limit }),
+  setGraphNodeTypesFilter: (filter) => set({ graphNodeTypesFilter: filter }),
+  setGraphEdgeTypesFilter: (filter) => set({ graphEdgeTypesFilter: filter }),
+  setGraphNodeLimit: (limit: number) => {
+    set({ graphNodeLimit: limit });
+    const repoID = get().activeRepoID;
+    if (repoID) {
+      get().fetchGraph(repoID, {
+        scope: get().graphScope,
+        node_limit: limit,
+        limit: limit,
+      });
+    }
+  },
+  setGraphViewMode: (mode) => set({ graphViewMode: mode }),
+
+  fetchArchitectureDiagram: async (repoID: string) => {
+    if (get().activeRepoID !== repoID) return;
+
+    if (archAbortController) {
+      archAbortController.abort();
+    }
+    archAbortController = new AbortController();
+    const signal = archAbortController.signal;
+
+    set({ isLoadingArchitecture: true, architectureError: null });
+
+    try {
+      const res = await apiClient.getArchitectureFlow(repoID, signal);
+      if (get().activeRepoID !== repoID) return;
+
+      set({
+        architectureDiagram: res,
+        isLoadingArchitecture: false,
+      });
+    } catch (err: any) {
+      if (err.message === "Request cancelled" || signal.aborted) return;
+      if (get().activeRepoID === repoID) {
+        set({
+          isLoadingArchitecture: false,
+          architectureError: err.message || "Failed to load architecture flow diagram",
+        });
+      }
+    }
+  },
 
   resetGraph: async (repoID: string) => {
     set({
@@ -577,13 +655,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().autoExpandParentPaths(relativePath);
     get().fetchSourceFile(repoID, relativePath);
 
-    // Sync matching file node in graph if present in graphNodes (do NOT fabricate)
     const matchingFileNode = get().graphNodes.find(
       (n) => n.kind === "NODE_FILE" && n.relative_path === relativePath
     );
 
     if (matchingFileNode) {
       set({ selectedNodeID: matchingFileNode.id });
+    } else {
+      // Attempt to expand graph neighborhood for target file if file ID is present in manifest
+      const manifestItem = get().fileManifest.find((f) => f.relative_path === relativePath);
+      if (manifestItem?.id) {
+        get().expandGraphNode(repoID, manifestItem.id);
+      }
     }
   },
 
@@ -704,7 +787,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     explainAbortController = new AbortController();
 
-    set({ isExplaining: true, explanationError: null });
+    const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const userMsg: ChatThreadItem = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      text: query,
+      timestamp,
+    };
+
+    const currentChat = get().chatMessages;
+    const updatedChat = [...currentChat, userMsg];
+
+    set({ chatMessages: updatedChat, isExplaining: true, explanationError: null });
+
+    const historyPayload: ChatMessage[] = currentChat.slice(-6).map((m) => ({
+      role: m.role,
+      content: m.text,
+    }));
 
     try {
       const res = await apiClient.explainCode(
@@ -715,17 +814,35 @@ export const useAppStore = create<AppState>((set, get) => ({
           root_symbol: opts?.rootSymbol,
           target_node: opts?.targetNode,
           flow: opts?.flow,
+          history: historyPayload,
         },
         explainAbortController.signal
       );
-      set({ explanationResult: res, isExplaining: false });
+
+      const assistantMsg: ChatThreadItem = {
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        text: res.answer,
+        citations: res.citations,
+        evidence: res.evidence,
+        isInsufficient: res.is_insufficient_evidence,
+        providerMode: res.provider_mode,
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      };
+
+      set({
+        explanationResult: res,
+        chatMessages: [...get().chatMessages, assistantMsg],
+        isExplaining: false,
+      });
     } catch (err: any) {
       if (err.message === "Request cancelled") return;
       set({ explanationError: err.message || "Failed to generate explanation", isExplaining: false });
     }
   },
 
-  clearExplanation: () => set({ explanationResult: null, explanationError: null }),
+  clearExplanation: () => set({ explanationResult: null, explanationError: null, chatMessages: [] }),
+  clearChatMessages: () => set({ chatMessages: [], explanationResult: null, explanationError: null }),
 
   selectFileAndHighlight: (relativePath: string, line: number) => {
     const repoID = get().activeRepoID;
