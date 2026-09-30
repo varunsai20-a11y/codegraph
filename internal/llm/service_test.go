@@ -506,3 +506,142 @@ func TestExplanationService_ExplainRequest_GreetingAndRepoOverview(t *testing.T)
 		t.Errorf("expected IsInsufficientEvidence = false for overview")
 	}
 }
+
+func TestHTTPLLMProvider_GeminiErrorResponses(t *testing.T) {
+	tests := []struct {
+		name           string
+		statusCode     int
+		responseBody   string
+		expectedErrIs  error
+		expectedErrMsg string
+	}{
+		{
+			name:           "Gemini 401 Unauthorized",
+			statusCode:     http.StatusUnauthorized,
+			responseBody:   `{"error": {"code": 401, "message": "API key not valid"}}`,
+			expectedErrIs:  llm.ErrAuthFailed,
+			expectedErrMsg: "Gemini authentication failed",
+		},
+		{
+			name:           "Gemini 403 Forbidden",
+			statusCode:     http.StatusForbidden,
+			responseBody:   `{"error": {"code": 403, "message": "Permission denied"}}`,
+			expectedErrIs:  llm.ErrAuthFailed,
+			expectedErrMsg: "Gemini authentication failed",
+		},
+		{
+			name:           "Gemini 404 Model Unavailable",
+			statusCode:     http.StatusNotFound,
+			responseBody:   `{"error": {"code": 404, "message": "models/gemini-2.5-flash is no longer available"}}`,
+			expectedErrIs:  llm.ErrModelUnavailable,
+			expectedErrMsg: "Gemini model unavailable",
+		},
+		{
+			name:           "Gemini 429 Rate Limited",
+			statusCode:     http.StatusTooManyRequests,
+			responseBody:   `{"error": {"code": 429, "message": "Resource exhausted"}}`,
+			expectedErrIs:  llm.ErrRateLimited,
+			expectedErrMsg: "Gemini rate limit exceeded",
+		},
+		{
+			name:           "Gemini 500 Internal Server Error",
+			statusCode:     http.StatusInternalServerError,
+			responseBody:   `{"error": {"code": 500, "message": "Internal error"}}`,
+			expectedErrIs:  llm.ErrProviderUnavailable,
+			expectedErrMsg: "Gemini API returned HTTP 500",
+		},
+		{
+			name:           "Gemini 503 Service Unavailable",
+			statusCode:     http.StatusServiceUnavailable,
+			responseBody:   `{"error": {"code": 503, "message": "High demand"}}`,
+			expectedErrIs:  llm.ErrProviderUnavailable,
+			expectedErrMsg: "Gemini API returned HTTP 503",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.responseBody))
+			}))
+			defer server.Close()
+
+			config := llm.LLMConfig{
+				Provider: "gemini",
+				Model:    "gemini-3.5-flash",
+				Endpoint: server.URL,
+				APIKey:   "test-key",
+				Timeout:  2 * time.Second,
+			}
+			provider, err := llm.NewHTTPLLMProvider(config, server.Client())
+			if err != nil {
+				t.Fatalf("failed to create provider: %v", err)
+			}
+
+			_, err = provider.Generate(context.Background(), llm.LLMRequest{UserQuery: "test"})
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+			if !errors.Is(err, tc.expectedErrIs) {
+				t.Errorf("expected error wrapping %v, got %v", tc.expectedErrIs, err)
+			}
+			if !strings.Contains(err.Error(), tc.expectedErrMsg) {
+				t.Errorf("expected error message to contain '%s', got '%s'", tc.expectedErrMsg, err.Error())
+			}
+		})
+	}
+}
+
+func TestHTTPLLMProvider_GeminiMalformedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"candidates": []}`)) // Empty candidates
+	}))
+	defer server.Close()
+
+	config := llm.LLMConfig{
+		Provider: "gemini",
+		Model:    "gemini-3.5-flash",
+		Endpoint: server.URL,
+		APIKey:   "test-key",
+		Timeout:  2 * time.Second,
+	}
+	provider, err := llm.NewHTTPLLMProvider(config, server.Client())
+	if err != nil {
+		t.Fatalf("failed to create provider: %v", err)
+	}
+
+	_, err = provider.Generate(context.Background(), llm.LLMRequest{UserQuery: "test"})
+	if err == nil {
+		t.Fatalf("expected error on malformed response, got nil")
+	}
+	if !errors.Is(err, llm.ErrMalformedResponse) {
+		t.Errorf("expected ErrMalformedResponse, got %v", err)
+	}
+}
+
+func TestHTTPLLMProvider_InvalidConfigAndMissingKey(t *testing.T) {
+	badConfig := llm.LLMConfig{
+		Provider: "",
+		Timeout:  0,
+	}
+	if err := badConfig.Validate(); err == nil {
+		t.Errorf("expected error for invalid config")
+	}
+
+	missingEndpointConfig := llm.LLMConfig{
+		Provider: "gemini",
+		Model:    "gemini-3.5-flash",
+		Endpoint: "",
+		Timeout:  2 * time.Second,
+	}
+	provider, err := llm.NewHTTPLLMProvider(missingEndpointConfig, nil)
+	if err != nil {
+		t.Fatalf("unexpected init error: %v", err)
+	}
+	_, err = provider.Generate(context.Background(), llm.LLMRequest{UserQuery: "test"})
+	if err == nil {
+		t.Errorf("expected error when endpoint URL is missing")
+	}
+}

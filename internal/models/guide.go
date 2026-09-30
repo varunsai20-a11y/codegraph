@@ -130,15 +130,18 @@ func (r *InvestigationRequest) Validate() error {
 }
 
 type Investigation struct {
-	ID               string               `json:"id"`
-	RepositoryID     string               `json:"repository_id"`
-	Status           InvestigationStatus  `json:"status"`
-	Summary          ArchitectureSummary  `json:"summary"`
-	Steps            []*InvestigationStep `json:"steps"`
-	CurrentStepIndex int                  `json:"current_step_index"`
-	CompletedStepIDs []string             `json:"completed_step_ids"`
-	IsComplete       bool                 `json:"is_complete"`
-	UpdatedAt        time.Time            `json:"updated_at"`
+	ID                  string               `json:"id"`
+	RepositoryID        string               `json:"repository_id"`
+	Status              InvestigationStatus  `json:"status"`
+	Summary             ArchitectureSummary  `json:"summary"`
+	ArchitectureSummary ArchitectureSummary  `json:"architecture_summary"`
+	Steps               []*InvestigationStep `json:"steps"`
+	CurrentStepIndex    int                  `json:"current_step_index"`
+	CurrentStep         *InvestigationStep   `json:"current_step,omitempty"`
+	SuggestedQuestions  []string             `json:"suggested_questions,omitempty"`
+	CompletedStepIDs    []string             `json:"completed_step_ids"`
+	IsComplete          bool                 `json:"is_complete"`
+	UpdatedAt           time.Time            `json:"updated_at"`
 }
 
 func NewInvestigation(scope RepositoryScope, summary ArchitectureSummary) (*Investigation, error) {
@@ -146,14 +149,15 @@ func NewInvestigation(scope RepositoryScope, summary ArchitectureSummary) (*Inve
 		return nil, ErrInvalidRepositoryScope
 	}
 	return &Investigation{
-		ID:               fmt.Sprintf("inv-%s", scope.RepositoryID),
-		RepositoryID:     scope.RepositoryID,
-		Status:           InvestigationInitialized,
-		Summary:          summary,
-		Steps:            make([]*InvestigationStep, 0),
-		CurrentStepIndex: 0,
-		CompletedStepIDs: make([]string, 0),
-		IsComplete:       false,
-		UpdatedAt:        time.Now(),
+		ID:                  fmt.Sprintf("inv-%s", scope.RepositoryID),
+		RepositoryID:        scope.RepositoryID,
+		Status:              InvestigationInitialized,
+		Summary:             summary,
+		ArchitectureSummary: summary,
+		Steps:               make([]*InvestigationStep, 0),
+		CurrentStepIndex:    0,
+		CompletedStepIDs:    make([]string, 0),
+		IsComplete:          false,
+		UpdatedAt:           time.Now(),
 	}, nil
 }

@@ -96,7 +96,7 @@ func (o *DefaultGuideOrchestrator) Guide(ctx context.Context, req *models.Invest
 
 	action := strings.ToUpper(strings.TrimSpace(req.Action))
 	switch action {
-	case "START", "RESET":
+	case "START", "RESET", "INITIALIZE":
 		inv.CurrentStepIndex = 0
 		inv.CompletedStepIDs = make([]string, 0)
 		for idx, st := range inv.Steps {
@@ -107,10 +107,7 @@ func (o *DefaultGuideOrchestrator) Guide(ctx context.Context, req *models.Invest
 			}
 		}
 
-	case "NEXT":
-		// Validate client-submitted completed IDs against authoritative valid step sequence.
-		// Strict Rule: A step i (i > 0) can only be marked completed if preceding step i-1 is also completed.
-		// Forged or out-of-order IDs are ignored.
+	case "NEXT", "NEXT_STEP":
 		validCompleted := make(map[string]bool)
 		for i, st := range inv.Steps {
 			submitted := false
@@ -166,6 +163,13 @@ func (o *DefaultGuideOrchestrator) Guide(ctx context.Context, req *models.Invest
 		inv.CurrentStepIndex = 0
 		if len(inv.Steps) > 0 {
 			inv.Steps[0].Status = models.StepActive
+		}
+	}
+
+	if inv.CurrentStepIndex >= 0 && inv.CurrentStepIndex < len(inv.Steps) {
+		inv.CurrentStep = inv.Steps[inv.CurrentStepIndex]
+		if inv.CurrentStep != nil && len(inv.CurrentStep.SuggestedQuestions) > 0 {
+			inv.SuggestedQuestions = inv.CurrentStep.SuggestedQuestions
 		}
 	}
 

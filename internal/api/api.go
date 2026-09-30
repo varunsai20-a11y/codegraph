@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -921,10 +922,12 @@ func (s *Server) handleExplainRepository(w http.ResponseWriter, r *http.Request)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
 		}
-		if errors.Is(err, llm.ErrProviderUnavailable) || errors.Is(err, llm.ErrProviderTimeout) {
+		if errors.Is(err, llm.ErrProviderUnavailable) || errors.Is(err, llm.ErrProviderTimeout) ||
+			errors.Is(err, llm.ErrAuthFailed) || errors.Is(err, llm.ErrModelUnavailable) ||
+			errors.Is(err, llm.ErrRateLimited) || errors.Is(err, llm.ErrMalformedResponse) {
 			log.Printf("[LLM] Gemini request failed: %v", err)
 			s.respondJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
-				"error":         "Gemini could not be reached. CodeGraph could not generate an AI explanation.",
+				"error":         fmt.Sprintf("CodeGraph AI Explanation Error: %v", err),
 				"provider_mode": "LLM_PROVIDER_ERROR",
 				"status":        "ERROR",
 				"details":       err.Error(),
@@ -941,6 +944,7 @@ func (s *Server) handleExplainRepository(w http.ResponseWriter, r *http.Request)
 
 type GuideRequestBody struct {
 	Action             string                       `json:"action,omitempty"`
+	RequestedAction    string                       `json:"requested_action,omitempty"`
 	MaxSteps           int                          `json:"max_steps,omitempty"`
 	CompletedStepIDs   []string                     `json:"completed_step_ids,omitempty"`
 	CurrentStepIndex   int                          `json:"current_step_index,omitempty"`
@@ -977,7 +981,12 @@ func (s *Server) handleGetGuide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, err := models.NewInvestigationRequest(scope, body.Action)
+	actionStr := body.Action
+	if actionStr == "" {
+		actionStr = body.RequestedAction
+	}
+
+	req, err := models.NewInvestigationRequest(scope, actionStr)
 	if err != nil {
 		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -986,10 +995,19 @@ func (s *Server) handleGetGuide(w http.ResponseWriter, r *http.Request) {
 	if body.MaxSteps > 0 {
 		req.MaxSteps = body.MaxSteps
 	}
-	if body.CompletedStepIDs != nil {
+
+	if body.CompletedStepIDs != nil && len(body.CompletedStepIDs) > 0 {
 		req.CompletedStepIDs = body.CompletedStepIDs
+	} else if body.InvestigationState != nil && len(body.InvestigationState.CompletedStepIDs) > 0 {
+		req.CompletedStepIDs = body.InvestigationState.CompletedStepIDs
 	}
-	req.CurrentStepIndex = body.CurrentStepIndex
+
+	if body.CurrentStepIndex > 0 {
+		req.CurrentStepIndex = body.CurrentStepIndex
+	} else if body.InvestigationState != nil && body.InvestigationState.CurrentStepIndex > 0 {
+		req.CurrentStepIndex = body.InvestigationState.CurrentStepIndex
+	}
+
 	req.StepType = body.StepType
 	req.TargetFileID = body.TargetFileID
 	req.TargetSymbolID = body.TargetSymbolID

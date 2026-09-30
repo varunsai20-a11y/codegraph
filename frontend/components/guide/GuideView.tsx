@@ -46,11 +46,21 @@ export const GuideView: React.FC = () => {
   }
 
   const handleStartOrReset = () => {
-    fetchGuide("INITIALIZE");
+    fetchGuide("RESET");
   };
 
   const handleNextStep = () => {
-    fetchGuide("NEXT_STEP");
+    if (!investigation || !investigation.steps || investigation.steps.length === 0) {
+      fetchGuide("INITIALIZE");
+      return;
+    }
+    const steps = investigation.steps;
+    const currentIndex = investigation.current_step_index ?? 0;
+    const nextIndex = currentIndex + 1;
+    if (nextIndex < steps.length) {
+      selectGuideStep(nextIndex);
+      fetchGuide("NEXT");
+    }
   };
 
   const handleQuestionClick = (question: string) => {
@@ -62,9 +72,10 @@ export const GuideView: React.FC = () => {
     setActiveTab("AI");
   };
 
-  const summary = investigation?.architecture_summary;
-  const currentStep = investigation?.current_step;
+  const summary = investigation?.architecture_summary || investigation?.summary;
   const steps = investigation?.steps || [];
+  const currentStep = investigation?.current_step || (steps.length > 0 ? steps[investigation?.current_step_index ?? 0] : undefined);
+  const isComplete = investigation?.is_complete || investigation?.status === "INVESTIGATION_COMPLETED" || (investigation?.current_step_index !== undefined && investigation.current_step_index >= steps.length - 1 && steps[steps.length - 1]?.status === "STEP_COMPLETED");
 
   return (
     <div className="flex flex-col h-full bg-background text-gray-200 overflow-y-auto p-5 space-y-5 font-mono select-text">
@@ -97,11 +108,11 @@ export const GuideView: React.FC = () => {
           </button>
           <button
             onClick={handleNextStep}
-            disabled={isGuiding || investigation?.status === "COMPLETED"}
+            disabled={isGuiding || isComplete}
             className="flex items-center space-x-1.5 px-3.5 py-1 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-mono font-bold rounded-sm disabled:opacity-50 transition shadow-sm"
           >
             <Play className="h-3.5 w-3.5 fill-current" />
-            <span>{isGuiding ? "Analyzing..." : "Next Step"}</span>
+            <span>{isGuiding ? "Analyzing..." : isComplete ? "Tour Completed" : "Next Step"}</span>
           </button>
         </div>
       </div>

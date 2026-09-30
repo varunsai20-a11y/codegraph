@@ -877,10 +877,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
         guideAbortController.signal
       );
-      set({ investigation: inv, isGuiding: false });
-
-      if (inv && inv.current_step) {
-        get().syncWorkspaceToGuideStep(inv.current_step);
+      if (inv) {
+        if (!inv.current_step && inv.steps && inv.steps.length > 0) {
+          const idx = inv.current_step_index ?? 0;
+          inv.current_step = inv.steps[idx] || inv.steps[0];
+        }
+        set({ investigation: inv, isGuiding: false });
+        if (inv.current_step) {
+          get().syncWorkspaceToGuideStep(inv.current_step);
+        }
       }
     } catch (err: any) {
       if (err.message === "Request cancelled") return;
@@ -909,7 +914,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const inv = get().investigation;
     if (!inv || !inv.steps || index < 0 || index >= inv.steps.length) return;
     const step = inv.steps[index];
-    const updated = { ...inv, current_step: step };
+    const completed = Array.from(new Set([
+      ...(inv.completed_step_ids || []),
+      ...inv.steps.slice(0, index).map((s) => s.id),
+    ]));
+    const updated = {
+      ...inv,
+      current_step_index: index,
+      current_step: step,
+      completed_step_ids: completed,
+    };
     set({ investigation: updated });
     get().syncWorkspaceToGuideStep(step);
   },

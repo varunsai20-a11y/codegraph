@@ -102,7 +102,7 @@ func Load() *Config {
 			llmProv = "gemini"
 			llmKey = os.Getenv("GEMINI_API_KEY")
 			if llmModel == "" {
-				llmModel = "gemini-2.5-flash"
+				llmModel = "gemini-3.8-flash"
 			}
 			if llmEnd == "" {
 				llmEnd = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", llmModel)
@@ -137,7 +137,7 @@ func Load() *Config {
 			llmKey = os.Getenv("GEMINI_API_KEY")
 		}
 		if llmModel == "" {
-			llmModel = "gemini-2.5-flash"
+			llmModel = "gemini-3.8-flash"
 		}
 		if llmEnd == "" {
 			llmEnd = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", llmModel)

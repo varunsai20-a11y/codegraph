@@ -311,6 +311,7 @@ export interface Investigation {
   id: string;
   repository_id: string;
   status: string;
+  summary?: ArchitectureSummary;
   architecture_summary: ArchitectureSummary;
   steps: InvestigationStep[];
   current_step_index: number;

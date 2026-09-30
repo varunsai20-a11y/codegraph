@@ -29,6 +29,8 @@ export const Header: React.FC = () => {
     error,
     searchQuery,
     setSearchQuery,
+    explanationResult,
+    explanationError,
   } = useAppStore();
 
   // Keyboard shortcut for search input focus
@@ -162,11 +164,34 @@ export const Header: React.FC = () => {
           <div className="h-4 w-[1px] bg-border" />
 
           {/* Engine Connection Badge */}
-          <div className="flex items-center space-x-1.5 text-[10px] font-mono px-2 py-0.5 rounded-sm border border-border bg-background">
+          <div className={`flex items-center space-x-1.5 text-[10px] font-mono px-2 py-0.5 rounded-sm border ${
+            error || explanationError || explanationResult?.provider_mode === "LLM_PROVIDER_ERROR"
+              ? "border-red-500/30 bg-red-950/20 text-red-400"
+              : explanationResult?.is_insufficient_evidence
+              ? "border-amber-500/30 bg-amber-950/20 text-amber-400"
+              : explanationResult?.provider_mode === "DETERMINISTIC_SUMMARY"
+              ? "border-amber-500/30 bg-amber-950/20 text-amber-300"
+              : "border-emerald-500/30 bg-emerald-950/20 text-emerald-400"
+          }`}>
             {error ? (
               <>
                 <AlertCircle className="w-3 h-3 text-red-400" />
                 <span className="text-red-400 font-bold">OFFLINE</span>
+              </>
+            ) : explanationError || explanationResult?.provider_mode === "LLM_PROVIDER_ERROR" ? (
+              <>
+                <AlertCircle className="w-3 h-3 text-red-400" />
+                <span className="text-red-400 font-bold">PROVIDER ERROR</span>
+              </>
+            ) : explanationResult?.is_insufficient_evidence ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                <span className="text-amber-400 font-bold">RETRIEVAL INSUFFICIENT</span>
+              </>
+            ) : explanationResult?.provider_mode === "DETERMINISTIC_SUMMARY" ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                <span className="text-amber-300 font-bold">DETERMINISTIC FALLBACK</span>
               </>
             ) : (
               <>

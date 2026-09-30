@@ -10,6 +10,10 @@ var (
 	ErrProviderUnavailable  = errors.New("llm provider unavailable")
 	ErrProviderTimeout      = errors.New("llm provider request timed out")
 	ErrInvalidConfiguration = errors.New("invalid llm provider configuration")
+	ErrAuthFailed           = errors.New("Gemini authentication failed")
+	ErrModelUnavailable     = errors.New("Gemini model unavailable")
+	ErrRateLimited          = errors.New("Gemini rate limit exceeded")
+	ErrMalformedResponse    = errors.New("Gemini response was malformed")
 )
 
 // TokenUsage holds prompt, completion, and total token usage metrics.

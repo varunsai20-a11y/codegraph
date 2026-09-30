@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ProviderProtocol defines the contract for wire-protocol request formatting and response parsing.
@@ -65,22 +66,44 @@ func (p *HTTPLLMProvider) Generate(ctx context.Context, req LLMRequest) (*LLMRes
 		return nil, fmt.Errorf("%w: endpoint URL missing for HTTP provider %s", ErrInvalidConfiguration, p.config.Provider)
 	}
 
-	httpReq, err := p.protocol.FormatRequest(ctx, p.config, req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to format request for %s: %w", p.config.Provider, err)
-	}
-
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("%w: %v", ErrProviderTimeout, ctx.Err())
+	var lastErr error
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("%w: %v", ErrProviderTimeout, ctx.Err())
+			case <-time.After(time.Duration(attempt) * 1500 * time.Millisecond):
+			}
 		}
-		// Return safe sanitized error without exposing raw request URL query tokens or secrets
-		return nil, fmt.Errorf("%w: provider %s HTTP request failed", ErrProviderUnavailable, p.config.Provider)
-	}
-	defer resp.Body.Close()
 
-	return p.protocol.ParseResponse(p.config, resp)
+		httpReq, err := p.protocol.FormatRequest(ctx, p.config, req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to format request for %s: %w", p.config.Provider, err)
+		}
+
+		resp, err := p.client.Do(httpReq)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("%w: %v", ErrProviderTimeout, ctx.Err())
+			}
+			lastErr = fmt.Errorf("%w: provider %s HTTP request failed: %v", ErrProviderUnavailable, p.config.Provider, err)
+			continue
+		}
+
+		llmResp, err := p.protocol.ParseResponse(p.config, resp)
+		resp.Body.Close()
+		if err != nil {
+			if strings.Contains(err.Error(), "503") || strings.Contains(err.Error(), "429") {
+				lastErr = fmt.Errorf("%w: %w", ErrProviderUnavailable, err)
+				continue
+			}
+			return nil, err
+		}
+		return llmResp, nil
+	}
+
+	return nil, lastErr
 }
 
 // OpenAIAdapter handles OpenAI & Ollama REST chat/completions wire protocol.
@@ -176,12 +199,32 @@ func (a *GeminiAdapter) FormatRequest(ctx context.Context, config LLMConfig, req
 
 func (a *GeminiAdapter) ParseResponse(config LLMConfig, resp *http.Response) (*LLMResponse, error) {
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: provider %s returned status %d", ErrProviderUnavailable, config.Provider, resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		bodyStr := string(body)
+
+		switch resp.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return nil, fmt.Errorf("%w (HTTP %d)", ErrAuthFailed, resp.StatusCode)
+		case http.StatusNotFound:
+			return nil, fmt.Errorf("%w: model '%s' unavailable (HTTP 404)", ErrModelUnavailable, config.Model)
+		case http.StatusTooManyRequests:
+			return nil, fmt.Errorf("%w (HTTP 429)", ErrRateLimited)
+		default:
+			if resp.StatusCode >= 500 {
+				return nil, fmt.Errorf("%w: Gemini API returned HTTP %d", ErrProviderUnavailable, resp.StatusCode)
+			}
+			if strings.Contains(bodyStr, "not found") || strings.Contains(bodyStr, "no longer available") {
+				return nil, fmt.Errorf("%w: model '%s' unavailable (HTTP %d)", ErrModelUnavailable, config.Model, resp.StatusCode)
+			}
+			return nil, fmt.Errorf("%w: Gemini API returned HTTP %d", ErrProviderUnavailable, resp.StatusCode)
+		}
 	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: failed to read response body: %v", ErrMalformedResponse, err)
 	}
+
 	var parsed struct {
 		Candidates []struct {
 			Content struct {
@@ -197,8 +240,9 @@ func (a *GeminiAdapter) ParseResponse(config LLMConfig, resp *http.Response) (*L
 		} `json:"usageMetadata"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("%w: invalid Gemini JSON response format", ErrProviderUnavailable)
+		return nil, fmt.Errorf("%w: invalid or empty response candidates from Gemini API", ErrMalformedResponse)
 	}
+
 	return &LLMResponse{
 		Content:  parsed.Candidates[0].Content.Parts[0].Text,
 		Provider: config.Provider,

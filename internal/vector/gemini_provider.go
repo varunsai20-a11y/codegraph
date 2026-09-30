@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// GeminiEmbeddingProvider implements EmbeddingProvider for Google Gemini text-embedding-004 API.
+// GeminiEmbeddingProvider implements EmbeddingProvider for Google Gemini gemini-embedding-001 API.
 type GeminiEmbeddingProvider struct {
 	apiKey    string
 	endpoint  string
@@ -30,7 +30,7 @@ func NewGeminiEmbeddingProvider(apiKey string, endpoint string) *GeminiEmbedding
 		apiKey:    apiKey,
 		endpoint:  endpoint,
 		modelName: "gemini-embedding-001",
-		dimension: 3072,
+		dimension: 768,
 		version:   "1.0.0",
 		client: &http.Client{
 			Timeout: 30 * time.Second,
