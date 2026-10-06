@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -101,116 +102,116 @@ func (p *GroundedSynthesisProvider) Generate(ctx context.Context, req LLMRequest
 	var sb strings.Builder
 	sb.WriteString("> **Notice**: Generated via CodeGraph Grounded Deterministic Engine (External LLM Provider Unavailable or Fallback Active).\n\n")
 
-	// 2. Repo Overview Handling
-	if isRepoOverviewQuery(req.UserQuery) {
-		var treeBlock *parsedEvidenceBlock
-		var readmeBlock *parsedEvidenceBlock
-		uniqueBlocksMap := make(map[string]parsedEvidenceBlock)
-		var blockOrder []string
+		// 2. Repo Overview Handling with mandatory 4-part structure
+		if isRepoOverviewQuery(req.UserQuery) {
+			var treeBlock *parsedEvidenceBlock
+			var readmeBlock *parsedEvidenceBlock
+			uniqueBlocksMap := make(map[string]parsedEvidenceBlock)
+			var blockOrder []string
 
-		for _, b := range blocks {
-			lPath := strings.ToLower(b.path)
-			if b.path == "workspace_tree" || strings.Contains(lPath, "workspace_tree") || strings.Contains(b.content, "Directory Tree:") {
-				treeCopy := b
-				treeBlock = &treeCopy
-				continue
-			}
-			if strings.HasSuffix(lPath, "readme.md") {
-				readmeCopy := b
-				readmeBlock = &readmeCopy
-			}
-			if existing, exists := uniqueBlocksMap[b.path]; exists {
-				if len(b.content) > len(existing.content) {
+			for _, b := range blocks {
+				lPath := strings.ToLower(b.path)
+				if b.path == "workspace_tree" || strings.Contains(lPath, "workspace_tree") || strings.Contains(b.content, "Directory Structure") {
+					treeCopy := b
+					treeBlock = &treeCopy
+					continue
+				}
+				if strings.HasSuffix(lPath, "readme.md") {
+					readmeCopy := b
+					readmeBlock = &readmeCopy
+				}
+				if existing, exists := uniqueBlocksMap[b.path]; exists {
+					if len(b.content) > len(existing.content) {
+						uniqueBlocksMap[b.path] = b
+					}
+				} else {
 					uniqueBlocksMap[b.path] = b
+					blockOrder = append(blockOrder, b.path)
+				}
+			}
+
+			var entryFile string
+			var reqFile string
+			for _, pathKey := range blockOrder {
+				b := uniqueBlocksMap[pathKey]
+				lPath := strings.ToLower(b.path)
+				if strings.HasSuffix(lPath, "requirements.txt") || strings.HasSuffix(lPath, "package.json") || strings.HasSuffix(lPath, "go.mod") || strings.HasSuffix(lPath, "cargo.toml") {
+					reqFile = b.path
+				}
+				if strings.HasSuffix(lPath, "run.py") || strings.HasSuffix(lPath, "main.py") || strings.HasSuffix(lPath, "app.py") || strings.HasSuffix(lPath, "main.go") || strings.HasSuffix(lPath, "index.ts") || strings.HasSuffix(lPath, "server.js") || strings.HasPrefix(lPath, "cmd/") || strings.HasPrefix(lPath, "api/") {
+					entryFile = b.path
+				}
+			}
+
+			// SECTION 1: BEGINNER
+			sb.WriteString("### BEGINNER\n")
+			projectPurpose := extractProjectPurpose(readmeBlock, blocks)
+			sb.WriteString(projectPurpose + "\n\n")
+			sb.WriteString("**How to Run & Launch Commands**:\n```bash\n")
+			if strings.HasSuffix(strings.ToLower(reqFile), "requirements.txt") {
+				sb.WriteString("pip install -r requirements.txt\n")
+			} else if strings.HasSuffix(strings.ToLower(reqFile), "package.json") {
+				sb.WriteString("npm install\n")
+			} else if strings.HasSuffix(strings.ToLower(reqFile), "go.mod") {
+				sb.WriteString("go build ./...\n")
+			} else {
+				sb.WriteString("# Install project dependencies\n")
+			}
+			if entryFile != "" {
+				lEntry := strings.ToLower(entryFile)
+				if strings.HasSuffix(lEntry, ".py") {
+					sb.WriteString(fmt.Sprintf("python %s\n", entryFile))
+				} else if strings.HasSuffix(lEntry, ".go") {
+					if strings.HasPrefix(lEntry, "cmd/") {
+						sb.WriteString(fmt.Sprintf("go run ./%s\n", entryFile))
+					} else {
+						sb.WriteString(fmt.Sprintf("go run %s\n", entryFile))
+					}
+				} else if strings.HasSuffix(lEntry, ".ts") || strings.HasSuffix(lEntry, ".js") {
+					sb.WriteString(fmt.Sprintf("npm start # or node %s\n", entryFile))
 				}
 			} else {
-				uniqueBlocksMap[b.path] = b
-				blockOrder = append(blockOrder, b.path)
+				sb.WriteString("# Run application entrypoint\n")
 			}
-		}
+			sb.WriteString("```\n\n")
 
-		// System Overview & Purpose
-		sb.WriteString("### System Overview & Purpose\n")
-		projectPurpose := extractProjectPurpose(readmeBlock, blocks)
-		sb.WriteString(projectPurpose + "\n\n")
-
-		// High-Level System Flow Diagram
-		sb.WriteString("```\n")
-		sb.WriteString("User Request / CLI Input\n")
-		sb.WriteString("       │\n")
-		sb.WriteString("       ▼\n")
-		sb.WriteString("Entrypoint Initialization & Environment Config\n")
-		sb.WriteString("       │\n")
-		sb.WriteString("       ▼\n")
-		sb.WriteString("Core Service Dispatch & Logic Execution\n")
-		sb.WriteString("       │\n")
-		sb.WriteString("       ▼\n")
-		sb.WriteString("Data Storage & Output Synthesis\n")
-		sb.WriteString("```\n\n")
-
-		// Execution Flow
-		sb.WriteString("### Execution & Control Flow\n")
-		var entryFile string
-		var reqFile string
-		for _, pathKey := range blockOrder {
-			b := uniqueBlocksMap[pathKey]
-			lPath := strings.ToLower(b.path)
-			if strings.HasSuffix(lPath, "requirements.txt") || strings.HasSuffix(lPath, "package.json") || strings.HasSuffix(lPath, "go.mod") {
-				reqFile = b.path
+			// SECTION 2: INTERMEDIATE
+			sb.WriteString("### INTERMEDIATE\n")
+			execFlow := generateExecutionFlowSummary(entryFile, uniqueBlocksMap)
+			sb.WriteString(execFlow + "\n\n")
+			if treeBlock != nil {
+				treeDesc := strings.TrimPrefix(treeBlock.content, "Repository Directory Structure (Total ")
+				sb.WriteString(fmt.Sprintf("**Module & Directory Architecture**:\n```\n%s\n```\n\n", treeDesc))
 			}
-			if strings.HasSuffix(lPath, "run.py") || strings.HasSuffix(lPath, "main.py") || strings.HasSuffix(lPath, "app.py") || strings.HasSuffix(lPath, "main.go") || strings.HasSuffix(lPath, "index.ts") || strings.HasSuffix(lPath, "server.js") || strings.HasPrefix(lPath, "cmd/") {
-				entryFile = b.path
-			}
-		}
-		execFlow := generateExecutionFlowSummary(entryFile, uniqueBlocksMap)
-		sb.WriteString(execFlow + "\n\n")
 
-		// How to Run & Terminal Commands
-		sb.WriteString("### How to Run & Terminal Commands\n")
-		sb.WriteString("```bash\n")
-		if strings.HasSuffix(strings.ToLower(reqFile), "requirements.txt") {
-			sb.WriteString("pip install -r requirements.txt\n")
-		} else if strings.HasSuffix(strings.ToLower(reqFile), "package.json") {
-			sb.WriteString("npm install\n")
-		} else if strings.HasSuffix(strings.ToLower(reqFile), "go.mod") {
-			sb.WriteString("go build ./...\n")
-		} else {
-			sb.WriteString("# Install project dependencies\n")
-		}
-		if entryFile != "" {
-			lEntry := strings.ToLower(entryFile)
-			if strings.HasSuffix(lEntry, ".py") {
-				sb.WriteString(fmt.Sprintf("python %s\n", entryFile))
-			} else if strings.HasSuffix(lEntry, ".go") {
-				if strings.HasPrefix(lEntry, "cmd/") {
-					sb.WriteString(fmt.Sprintf("go run ./%s\n", entryFile))
-				} else {
-					sb.WriteString(fmt.Sprintf("go run %s\n", entryFile))
+			// SECTION 3: CODE EVIDENCE
+			sb.WriteString("### CODE EVIDENCE\n")
+			if len(blockOrder) > 0 {
+				sb.WriteString("Retrieved repository evidence sources:\n")
+				for _, pathKey := range blockOrder {
+					b := uniqueBlocksMap[pathKey]
+					sb.WriteString(fmt.Sprintf("- `%s` (%s)\n", b.path, b.itemType))
 				}
-			} else if strings.HasSuffix(lEntry, ".ts") || strings.HasSuffix(lEntry, ".js") {
-				sb.WriteString(fmt.Sprintf("npm start # or node %s\n", entryFile))
+			} else {
+				sb.WriteString("No specific code files retrieved.\n")
 			}
-		} else {
-			sb.WriteString("# Run application entrypoint\n")
-		}
-		sb.WriteString("```\n")
+			sb.WriteString("\n")
 
-		if treeBlock != nil {
-			treeDesc := strings.TrimPrefix(treeBlock.content, "Top-level Repository Directory Tree: ")
-			sb.WriteString(fmt.Sprintf("\n*Workspace Layout*: `%s`\n", treeDesc))
-		}
+			// SECTION 4: UNKNOWN / NOT VERIFIED
+			sb.WriteString("### UNKNOWN / NOT VERIFIED\n")
+			sb.WriteString("I could not verify any unindexed runtime components, dynamic server routes, or external secrets outside the indexed repository evidence.\n")
 
-		return &LLMResponse{
-			Content:  sb.String(),
-			Provider: p.name,
-			Model:    p.model,
-			Usage: TokenUsage{
-				PromptTokens:     240,
-				CompletionTokens: 180,
-				TotalTokens:      420,
-			},
-		}, nil
-	}
+			return &LLMResponse{
+				Content:  sb.String(),
+				Provider: p.name,
+				Model:    p.model,
+				Usage: TokenUsage{
+					PromptTokens:     240,
+					CompletionTokens: 180,
+					TotalTokens:      420,
+				},
+			}, nil
+		}
 
 	// 3. Specific Code / Component Synthesis
 	sb.WriteString("### Code Explanation & System Interactions\n\n")
@@ -649,6 +650,7 @@ func (s *GroundedExplanationService) ExplainRequest(
 	scope := req.RepositoryScope
 
 	// 1. Compose evidence package using EvidenceComposer if available
+	composeStart := time.Now()
 	var pkg *models.EvidencePackage
 	var err error
 
@@ -682,6 +684,7 @@ func (s *GroundedExplanationService) ExplainRequest(
 			}
 		}
 	}
+	composeDuration := time.Since(composeStart)
 
 	// Convert package items to ExplanationEvidence
 	evList := make([]*models.ExplanationEvidence, 0, len(pkg.Items))
@@ -712,14 +715,27 @@ func (s *GroundedExplanationService) ExplainRequest(
 	}
 
 	// 3. Build prompt
+	promptStart := time.Now()
 	llmReq, err := s.promptBuilder.BuildPrompt(req, pkg)
+	promptDuration := time.Since(promptStart)
 	if err != nil {
 		return nil, fmt.Errorf("prompt building failed: %w", err)
 	}
 
 	// 4. Generate LLM completion
+	providerStart := time.Now()
 	llmResp, err := s.provider.Generate(ctx, llmReq)
+	providerDuration := time.Since(providerStart)
+	totalDuration := time.Since(startTime)
+
+	provName := "llm"
+	if s.provider != nil {
+		provName = s.provider.Name()
+	}
+
 	if err != nil {
+		log.Printf("[analysis] query='%s' compose=%dms prompt=%dms %s_error=%v provider_gen=%dms total=%dms",
+			req.Question, composeDuration.Milliseconds(), promptDuration.Milliseconds(), provName, err, providerDuration.Milliseconds(), totalDuration.Milliseconds())
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -728,6 +744,9 @@ func (s *GroundedExplanationService) ExplainRequest(
 		}
 		return nil, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
 	}
+
+	log.Printf("[analysis] query='%s' sufficiency=%s compose=%dms prompt=%dms %s=%dms total=%dms",
+		req.Question, pkg.Sufficiency.Status, composeDuration.Milliseconds(), promptDuration.Milliseconds(), provName, providerDuration.Milliseconds(), totalDuration.Milliseconds())
 
 	// 5. Validate citations deterministically
 	report := s.validator.Validate(llmResp.Content, pkg)
@@ -785,7 +804,9 @@ func (s *GroundedExplanationService) ExplainRequest(
 	}
 
 	provMode := "REAL_LLM"
-	if llmResp.Provider == "codegraph-engine" {
+	if strings.EqualFold(llmResp.Provider, "ollama") {
+		provMode = "LOCAL_LLM"
+	} else if llmResp.Provider == "codegraph-engine" {
 		provMode = "DETERMINISTIC_SUMMARY"
 	}
 

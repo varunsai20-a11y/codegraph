@@ -19,6 +19,7 @@ import {
 export const ExplanationPanel: React.FC = () => {
   const {
     activeRepo,
+    activeRepoStats,
     selectedPath,
     selectedSymbolID,
     selectedNodeID,
@@ -176,11 +177,12 @@ export const ExplanationPanel: React.FC = () => {
               );
             }
 
-            // Compute analysis stats for status block
-            const evCount = msg.evidence?.length || 0;
-            const filesAnalyzed = Math.max(evCount * 3, 14);
-            const symbolsReviewed = Math.max(evCount * 2, 9);
-            const relationshipsTraced = Math.max(evCount + 4, 6);
+            // Compute dynamic repository analysis stats for status block
+            const indexedFiles = activeRepoStats?.files_indexed ?? (msg.evidence?.length || 0);
+            const discoveredFiles = activeRepoStats?.files_discovered ?? indexedFiles;
+            const folderCount = activeRepoStats?.folders_discovered ?? 0;
+            const symbolCount = activeRepoStats?.total_symbols ?? 0;
+            const relCount = activeRepoStats?.total_relationships ?? 0;
 
             const firstEv = msg.evidence && msg.evidence.length > 0 ? msg.evidence[0] : undefined;
 
@@ -196,7 +198,7 @@ export const ExplanationPanel: React.FC = () => {
                     <span>ANALYSIS COMPLETE</span>
                   </div>
                   <p className="text-[10px] text-gray-400 mt-1 font-mono">
-                    Analyzed {filesAnalyzed} files · Reviewed {symbolsReviewed} symbols · Traced {relationshipsTraced} relationships
+                    Indexed {indexedFiles}/{discoveredFiles} files ({folderCount} folders) · Reviewed {symbolCount} symbols · Traced {relCount} relationships
                   </p>
                 </div>
 
@@ -284,22 +286,38 @@ export const ExplanationPanel: React.FC = () => {
           })
         )}
 
-        {/* Analyzing Progress State */}
+        {/* Analyzing / Generation Progress State */}
         {isExplaining && (
-          <div className="bg-surface border border-border rounded-sm p-4 space-y-2 font-mono">
+          <div className="bg-surface border border-cyan-500/30 rounded-sm p-4 space-y-2.5 font-mono shadow-sm">
             <div className="flex items-center space-x-2 text-xs font-bold text-cyan-300 uppercase tracking-wider">
-              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping shrink-0" />
-              <span>ANALYZING CODEBASE...</span>
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping shrink-0" />
+              <span>GENERATING EXPLANATION</span>
             </div>
-            <p className="text-[11px] text-gray-400 font-mono">
-              Analyzed 18 files · Reviewed 12 symbols · Tracing relationships...
-            </p>
+            <div className="text-[11px] space-y-1 font-mono text-gray-300">
+              <div className="flex items-center space-x-2 text-cyan-400 font-semibold">
+                <Terminal className="w-3.5 h-3.5" />
+                <span>Ollama · qwen2.5:3b</span>
+                <span className="px-1.5 py-0.5 text-[9px] bg-cyan-950 border border-cyan-500/40 text-cyan-300 rounded-sm">LOCAL_LLM</span>
+              </div>
+              <p className="text-gray-400">
+                Retrieving code evidence ({activeRepoStats?.files_indexed ?? 0} files, {activeRepoStats?.total_symbols ?? 0} symbols). Local inference may take a little longer...
+              </p>
+            </div>
           </div>
         )}
 
         {explanationError && (
-          <div className="p-3 text-xs bg-red-950/40 border border-red-500/40 rounded-sm text-red-300 font-mono">
-            <strong>Error:</strong> {explanationError}
+          <div className="p-3.5 text-xs bg-red-950/40 border border-red-500/40 rounded-sm text-red-300 font-mono space-y-1 shadow-sm">
+            <div className="font-bold flex items-center gap-1.5 text-red-400 uppercase tracking-wider">
+              <span>{explanationError.toLowerCase().includes("timeout") || explanationError.toLowerCase().includes("timed out") ? "Provider timeout" : "EXPLANATION ERROR"}</span>
+            </div>
+            <p className="text-[11px] text-red-200/90 leading-relaxed font-mono">
+              {explanationError.toLowerCase().includes("timed out after") || explanationError.toLowerCase().includes("provider timeout")
+                ? explanationError.startsWith("Provider timeout:")
+                  ? explanationError
+                  : `Ollama/qwen2.5:3b did not complete within the configured limit (${explanationError}).`
+                : explanationError}
+            </p>
           </div>
         )}
 

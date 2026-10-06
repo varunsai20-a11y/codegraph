@@ -293,3 +293,176 @@ func TestExplainRepository_GroundingAndIsolation(t *testing.T) {
 		t.Errorf("expected status 404 for non-existent repository, got %d", badW.Code)
 	}
 }
+
+func TestMultiRepositoryDynamicStats(t *testing.T) {
+	srv, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// 1. Create Repo Tiny (3 files, 1 folder)
+	repoTiny := &models.Repository{
+		ID:         "repo-tiny-id",
+		Name:       "repo-tiny",
+		SourceType: models.SourceTypeLocal,
+		LocalPath:  "/tmp/tiny",
+		Status:     models.RepoStatusIndexed,
+	}
+	if err := srv.store.CreateRepository(ctx, repoTiny); err != nil {
+		t.Fatalf("failed to create repoTiny: %v", err)
+	}
+
+	manifestsTiny := []*models.FileManifestItem{
+		{ID: "t1", RepositoryID: repoTiny.ID, RelativePath: "src/a.go", Language: "Go", Status: models.FileStatusIndexed},
+		{ID: "t2", RepositoryID: repoTiny.ID, RelativePath: "src/b.go", Language: "Go", Status: models.FileStatusIndexed},
+		{ID: "t3", RepositoryID: repoTiny.ID, RelativePath: "src/c.go", Language: "Go", Status: models.FileStatusIndexed},
+	}
+	symbolsTiny := []*models.Symbol{
+		{ID: "sym-t1", RepositoryID: repoTiny.ID, FileID: "t1", Name: "FuncA", Kind: models.SymbolKindFunction},
+		{ID: "sym-t2", RepositoryID: repoTiny.ID, FileID: "t2", Name: "FuncB", Kind: models.SymbolKindFunction},
+	}
+	_ = srv.store.SaveIndexData(ctx, repoTiny.ID, manifestsTiny, symbolsTiny, nil, nil, nil)
+
+	// 2. Create Repo Medium (25 files across 4 folders)
+	repoMed := &models.Repository{
+		ID:         "repo-medium-id",
+		Name:       "repo-medium",
+		SourceType: models.SourceTypeLocal,
+		LocalPath:  "/tmp/medium",
+		Status:     models.RepoStatusIndexed,
+	}
+	if err := srv.store.CreateRepository(ctx, repoMed); err != nil {
+		t.Fatalf("failed to create repoMed: %v", err)
+	}
+
+	var manifestsMed []*models.FileManifestItem
+	folders := []string{"pkg/core", "pkg/util", "cmd/app", "docs"}
+	for i := 0; i < 25; i++ {
+		folder := folders[i%len(folders)]
+		manifestsMed = append(manifestsMed, &models.FileManifestItem{
+			ID:           fmt.Sprintf("m%d", i),
+			RepositoryID: repoMed.ID,
+			RelativePath: fmt.Sprintf("%s/file_%d.go", folder, i),
+			Language:     "Go",
+			Status:       models.FileStatusIndexed,
+		})
+	}
+	var symbolsMed []*models.Symbol
+	for i := 0; i < 40; i++ {
+		symbolsMed = append(symbolsMed, &models.Symbol{
+			ID:           fmt.Sprintf("sym-m%d", i),
+			RepositoryID: repoMed.ID,
+			FileID:       "m0",
+			Name:         fmt.Sprintf("SymMed_%d", i),
+			Kind:         models.SymbolKindFunction,
+		})
+	}
+	_ = srv.store.SaveIndexData(ctx, repoMed.ID, manifestsMed, symbolsMed, nil, nil, nil)
+
+	// 3. Create Repo Large (120 files across 12 folders)
+	repoLarge := &models.Repository{
+		ID:         "repo-large-id",
+		Name:       "repo-large",
+		SourceType: models.SourceTypeLocal,
+		LocalPath:  "/tmp/large",
+		Status:     models.RepoStatusIndexed,
+	}
+	if err := srv.store.CreateRepository(ctx, repoLarge); err != nil {
+		t.Fatalf("failed to create repoLarge: %v", err)
+	}
+
+	var manifestsLarge []*models.FileManifestItem
+	for i := 0; i < 120; i++ {
+		folderNum := (i % 12) + 1
+		manifestsLarge = append(manifestsLarge, &models.FileManifestItem{
+			ID:           fmt.Sprintf("l%d", i),
+			RepositoryID: repoLarge.ID,
+			RelativePath: fmt.Sprintf("module_%d/submodule/file_%d.ts", folderNum, i),
+			Language:     "TypeScript",
+			Status:       models.FileStatusIndexed,
+		})
+	}
+	var symbolsLarge []*models.Symbol
+	for i := 0; i < 200; i++ {
+		symbolsLarge = append(symbolsLarge, &models.Symbol{
+			ID:           fmt.Sprintf("sym-l%d", i),
+			RepositoryID: repoLarge.ID,
+			FileID:       "l0",
+			Name:         fmt.Sprintf("SymLarge_%d", i),
+			Kind:         models.SymbolKindClass,
+		})
+	}
+	_ = srv.store.SaveIndexData(ctx, repoLarge.ID, manifestsLarge, symbolsLarge, nil, nil, nil)
+
+	// Function to fetch stats via API
+	getStats := func(repoID string) *models.RepositoryStats {
+		req := httptest.NewRequest("GET", fmt.Sprintf("/api/repositories/%s/stats", repoID), nil)
+		w := httptest.NewRecorder()
+		srv.router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for repo %s, got %d: %s", repoID, w.Code, w.Body.String())
+		}
+		var stats models.RepositoryStats
+		if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
+			t.Fatalf("failed to parse stats: %v", err)
+		}
+		return &stats
+	}
+
+	// Step 4. Validate Tiny Repo Stats
+	sTiny := getStats(repoTiny.ID)
+	if sTiny.FilesDiscovered != 3 || sTiny.FilesIndexed != 3 {
+		t.Errorf("Tiny repo expected 3 files discovered/indexed, got %d discovered, %d indexed", sTiny.FilesDiscovered, sTiny.FilesIndexed)
+	}
+	if sTiny.FoldersDiscovered != 1 {
+		t.Errorf("Tiny repo expected 1 folder (src), got %d", sTiny.FoldersDiscovered)
+	}
+	if sTiny.TotalSymbols != 2 {
+		t.Errorf("Tiny repo expected 2 symbols, got %d", sTiny.TotalSymbols)
+	}
+
+	// Step 5. Validate Medium Repo Stats
+	sMed := getStats(repoMed.ID)
+	if sMed.FilesDiscovered != 25 || sMed.FilesIndexed != 25 {
+		t.Errorf("Medium repo expected 25 files, got %d discovered, %d indexed", sMed.FilesDiscovered, sMed.FilesIndexed)
+	}
+	if sMed.FoldersDiscovered < 4 {
+		t.Errorf("Medium repo expected at least 4 folders, got %d", sMed.FoldersDiscovered)
+	}
+	if sMed.TotalSymbols != 40 {
+		t.Errorf("Medium repo expected 40 symbols, got %d", sMed.TotalSymbols)
+	}
+
+	// Step 6. Validate Large Repo Stats
+	sLarge := getStats(repoLarge.ID)
+	if sLarge.FilesDiscovered != 120 || sLarge.FilesIndexed != 120 {
+		t.Errorf("Large repo expected 120 files, got %d discovered, %d indexed", sLarge.FilesDiscovered, sLarge.FilesIndexed)
+	}
+	if sLarge.FoldersDiscovered < 12 {
+		t.Errorf("Large repo expected at least 12 folders, got %d", sLarge.FoldersDiscovered)
+	}
+	if sLarge.TotalSymbols != 200 {
+		t.Errorf("Large repo expected 200 symbols, got %d", sLarge.TotalSymbols)
+	}
+
+	// Step 7. Repository Switch Test Sequence: Tiny -> Medium -> Large -> Tiny
+	switchSequence := []struct {
+		id            string
+		expectedFiles int
+	}{
+		{repoTiny.ID, 3},
+		{repoMed.ID, 25},
+		{repoLarge.ID, 120},
+		{repoTiny.ID, 3},
+	}
+
+	for idx, step := range switchSequence {
+		st := getStats(step.id)
+		if st.FilesIndexed != step.expectedFiles {
+			t.Errorf("Switch step %d (repo %s): expected %d indexed files, got %d", idx, step.id, step.expectedFiles, st.FilesIndexed)
+		}
+		if st.RepositoryID != step.id {
+			t.Errorf("Switch step %d: repository ID mismatch, expected %s got %s", idx, step.id, st.RepositoryID)
+		}
+	}
+}

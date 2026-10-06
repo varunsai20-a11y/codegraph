@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -160,6 +161,28 @@ func (r *GraphRetriever) Retrieve(
 			candidates = append(candidates, item)
 		}
 
+	case IntentFileQuery:
+		targetFile := strings.ToLower(ExtractTargetFile(trimmedQuery))
+		targetBase := filepath.Base(targetFile)
+		for _, target := range targetNodes {
+			lowerPath := strings.ToLower(target.RelativePath)
+			if targetFile != "" && (lowerPath == targetFile || filepath.Base(lowerPath) == targetBase || strings.HasSuffix(lowerPath, "/"+targetFile)) {
+				item := r.createNodeEvidence(scope, target, "", "TARGET_FILE", 95.0, targetResolution, candidateQuals)
+				candidates = append(candidates, item)
+				if target.Kind == models.NodeKindFile {
+					fileID := graph.ExtractIDFromNodeID(target.ID)
+					for _, dep := range engine.GetModuleDependencies(fileID) {
+						item := r.createNodeEvidence(scope, dep, models.EdgeKindImports, "DEPENDENCY", 85.0, targetResolution, candidateQuals)
+						candidates = append(candidates, item)
+					}
+					for _, dep := range engine.GetDependents(fileID) {
+						item := r.createNodeEvidence(scope, dep, models.EdgeKindImports, "DEPENDENT", 85.0, targetResolution, candidateQuals)
+						candidates = append(candidates, item)
+					}
+				}
+			}
+		}
+
 	default:
 		for _, target := range targetNodes {
 			neighNodes, neighEdges := engine.GetNeighborhood(target.ID, maxHops)
@@ -197,15 +220,31 @@ func (r *GraphRetriever) Retrieve(
 
 func (r *GraphRetriever) findTargetNodes(engine *graph.Engine, query string) []*models.Node {
 	lowerQuery := strings.ToLower(query)
-	var matches []*models.Node
+	targetFile := strings.ToLower(ExtractTargetFile(query))
+	targetSymbol := strings.ToLower(ExtractTargetSymbol(query))
 
+	var matches []*models.Node
 	allNodes := engine.GetAllNodes()
 
-	// 1. Exact qualified name, label, or path match
+	// 1. Exact qualified name, label, target file, or path match
 	for _, n := range allNodes {
 		lowerLabel := strings.ToLower(n.Label)
 		lowerQual := strings.ToLower(n.QualifiedName)
 		lowerPath := strings.ToLower(n.RelativePath)
+
+		if targetFile != "" {
+			if lowerPath == targetFile || filepath.Base(lowerPath) == filepath.Base(targetFile) || strings.HasSuffix(lowerPath, "/"+targetFile) {
+				matches = append(matches, n)
+				continue
+			}
+		}
+
+		if targetSymbol != "" {
+			if lowerQual == targetSymbol || lowerLabel == targetSymbol {
+				matches = append(matches, n)
+				continue
+			}
+		}
 
 		if lowerQuery == lowerQual || lowerQuery == lowerLabel || lowerQuery == lowerPath {
 			matches = append(matches, n)

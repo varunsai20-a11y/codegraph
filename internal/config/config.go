@@ -8,10 +8,11 @@ import (
 )
 
 type LLMProviderConfig struct {
-	Provider string
-	Model    string
-	APIKey   string
-	Endpoint string
+	Provider       string
+	Model          string
+	APIKey         string
+	Endpoint       string
+	TimeoutSeconds int
 }
 
 type Config struct {
@@ -25,6 +26,7 @@ type Config struct {
 	LLM                LLMProviderConfig
 	Gemini             LLMProviderConfig
 	Groq               LLMProviderConfig
+	Ollama             LLMProviderConfig
 	LLMProviderOrder   []string
 }
 
@@ -95,7 +97,27 @@ func Load() *Config {
 		}
 	}
 
-	llmProv := strings.ToLower(os.Getenv("LLM_PROVIDER"))
+	// Build Ollama config
+	ollamaBaseURL := os.Getenv("OLLAMA_BASE_URL")
+	if ollamaBaseURL == "" {
+		ollamaBaseURL = "http://localhost:11434"
+	}
+	ollamaBaseURL = strings.TrimSuffix(ollamaBaseURL, "/")
+	ollamaModel := os.Getenv("OLLAMA_MODEL")
+	if ollamaModel == "" {
+		ollamaModel = "qwen2.5:3b"
+	}
+	ollamaEnd := ollamaBaseURL + "/api/chat"
+	ollamaCfg := LLMProviderConfig{
+		Provider: "ollama",
+		Model:    ollamaModel,
+		Endpoint: ollamaEnd,
+	}
+
+	llmProv := strings.ToLower(os.Getenv("CODEGRAPH_LLM_PROVIDER"))
+	if llmProv == "" {
+		llmProv = strings.ToLower(os.Getenv("LLM_PROVIDER"))
+	}
 	llmModel := os.Getenv("LLM_MODEL")
 	llmKey := os.Getenv("LLM_API_KEY")
 	llmEnd := os.Getenv("LLM_ENDPOINT")
@@ -143,7 +165,14 @@ func Load() *Config {
 		providerOrder = []string{"gemini", "groq"}
 	}
 
-	if llmProv == "" {
+	if llmProv == "ollama" {
+		if llmModel == "" {
+			llmModel = ollamaModel
+		}
+		if llmEnd == "" {
+			llmEnd = ollamaEnd
+		}
+	} else if llmProv == "" {
 		if geminiKey != "" {
 			llmProv = "gemini"
 			llmKey = geminiKey
@@ -166,6 +195,17 @@ func Load() *Config {
 		}
 	}
 
+	llmTimeoutSec := 180
+	if tStr := os.Getenv("CODEGRAPH_LLM_TIMEOUT_SECONDS"); tStr != "" {
+		if val, err := strconv.Atoi(tStr); err == nil && val > 0 {
+			llmTimeoutSec = val
+		}
+	} else if tStr := os.Getenv("LLM_TIMEOUT_SECONDS"); tStr != "" {
+		if val, err := strconv.Atoi(tStr); err == nil && val > 0 {
+			llmTimeoutSec = val
+		}
+	}
+
 	return &Config{
 		Port:               port,
 		MaxFileSize:        maxFileSize,
@@ -173,15 +213,17 @@ func Load() *Config {
 		DatabasePath:       dbPath,
 		AllowedOrigins:     allowedOrigins,
 		DefaultExclusions:  []string{".git", "node_modules", "dist", "build", "coverage", ".cache", ".tmp", "vendor"},
-		SupportedLanguages: []string{"TypeScript", "JavaScript", "Python", "Go", "Java", "TSX", "JSX"},
+		SupportedLanguages: []string{"TypeScript", "JavaScript", "Python", "Go", "Java", "TSX", "JSX", "Rust", "C", "C++", "JSON", "Markdown", "YAML", "TOML"},
 		LLM: LLMProviderConfig{
-			Provider: llmProv,
-			Model:    llmModel,
-			APIKey:   llmKey,
-			Endpoint: llmEnd,
+			Provider:       llmProv,
+			Model:          llmModel,
+			APIKey:         llmKey,
+			Endpoint:       llmEnd,
+			TimeoutSeconds: llmTimeoutSec,
 		},
 		Gemini:           geminiCfg,
 		Groq:             groqCfg,
+		Ollama:           ollamaCfg,
 		LLMProviderOrder: providerOrder,
 	}
 }

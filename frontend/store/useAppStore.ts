@@ -15,6 +15,7 @@ import {
   ArchitectureDiagram,
   ChatMessage,
   ChatThreadItem,
+  RepositoryStats,
 } from "@/lib/types";
 import { apiClient } from "@/lib/api-client";
 
@@ -27,6 +28,7 @@ let flowAbortController: AbortController | null = null;
 let explainAbortController: AbortController | null = null;
 let guideAbortController: AbortController | null = null;
 let archAbortController: AbortController | null = null;
+let statsAbortController: AbortController | null = null;
 
 interface AppState {
   repositories: Repository[];
@@ -71,14 +73,18 @@ interface AppState {
   isLoadingRepos: boolean;
   isLoadingManifest: boolean;
   isLoadingSource: boolean;
+  activeRepoStats: RepositoryStats | null;
+  isLoadingStats: boolean;
 
   error: string | null;
   manifestError: string | null;
   sourceError: string | null;
+  statsError: string | null;
 
   // Actions
   fetchRepositories: () => Promise<void>;
   selectRepository: (id: string) => Promise<void>;
+  fetchRepositoryStats: (repoID: string) => Promise<void>;
   fetchFileManifest: (repoID: string) => Promise<void>;
   fetchSourceFile: (repoID: string, relativePath: string) => Promise<void>;
   fetchGraph: (repoID: string, params?: GraphQueryParams) => Promise<void>;
@@ -215,6 +221,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   isGuiding: false,
   guideError: null,
 
+  activeRepoStats: null,
+  isLoadingStats: false,
+  statsError: null,
+
   error: null,
   manifestError: null,
   sourceError: null,
@@ -238,11 +248,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
 
       if (active) {
+        get().fetchRepositoryStats(active.id);
         get().fetchFileManifest(active.id);
         get().fetchGraph(active.id, { scope: "OVERVIEW", node_limit: get().graphNodeLimit, limit: get().graphNodeLimit });
         get().fetchArchitectureDiagram(active.id);
       } else {
-        set({ fileManifest: [], selectedPath: null, sourceContent: null, graphNodes: [], graphEdges: [], architectureDiagram: null });
+        set({ activeRepoStats: null, fileManifest: [], selectedPath: null, sourceContent: null, graphNodes: [], graphEdges: [], architectureDiagram: null });
       }
     } catch (err: any) {
       set({
@@ -273,6 +284,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       archAbortController.abort();
       archAbortController = null;
     }
+    if (statsAbortController) {
+      statsAbortController.abort();
+      statsAbortController = null;
+    }
 
     const repos = get().repositories;
     const active = repos.find((r) => r.id === id) || null;
@@ -280,6 +295,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       activeRepoID: id,
       activeRepo: active,
+      activeRepoStats: null,
       fileManifest: [],
       selectedPath: null,
       sourceContent: null,
@@ -303,14 +319,37 @@ export const useAppStore = create<AppState>((set, get) => ({
       graphError: null,
       architectureError: null,
       flowError: null,
+      statsError: null,
     });
 
     if (active) {
       await Promise.all([
+        get().fetchRepositoryStats(id),
         get().fetchFileManifest(id),
         get().fetchGraph(id, { scope: "OVERVIEW", node_limit: get().graphNodeLimit, limit: get().graphNodeLimit }),
         get().fetchArchitectureDiagram(id),
       ]);
+    }
+  },
+
+  fetchRepositoryStats: async (repoID: string) => {
+    if (statsAbortController) {
+      statsAbortController.abort();
+    }
+    statsAbortController = new AbortController();
+    const signal = statsAbortController.signal;
+
+    set({ isLoadingStats: true, statsError: null });
+    try {
+      const stats = await apiClient.getRepositoryStats(repoID, signal);
+      if (get().activeRepoID === repoID) {
+        set({ activeRepoStats: stats, isLoadingStats: false });
+      }
+    } catch (err: any) {
+      if (err.message === "Request cancelled") return;
+      if (get().activeRepoID === repoID) {
+        set({ isLoadingStats: false, statsError: err.message || "Failed to load repo stats" });
+      }
     }
   },
 

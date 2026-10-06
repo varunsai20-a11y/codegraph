@@ -261,6 +261,18 @@ export interface ExplanationResponse {
   error_message?: string;
 }
 
+export interface RepositoryStats {
+  repository_id: string;
+  files_discovered: number;
+  files_indexed: number;
+  files_skipped: number;
+  files_failed: number;
+  folders_discovered: number;
+  total_symbols: number;
+  total_relationships: number;
+  languages: Record<string, number>;
+}
+
 export interface ModuleSummary {
   name: string;
   file_count: number;

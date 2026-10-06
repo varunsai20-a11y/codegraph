@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +32,7 @@ func NewSQLiteStorage(dbPath string) (*SQLiteStorage, error) {
 
 	dsn := dbPath
 	if !strings.Contains(dsn, "?") {
-		dsn += "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+		dsn += "?_pragma=busy_timeout=5000&_pragma=journal_mode=WAL"
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -495,40 +496,53 @@ func (s *SQLiteStorage) UpdateIndexJob(ctx context.Context, job *models.IndexJob
 // ManifestStore implementations
 
 func (s *SQLiteStorage) SaveManifestItems(ctx context.Context, repoID string, items []*models.FileManifestItem) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
+	if len(items) == 0 {
+		return nil
 	}
-	defer tx.Rollback()
-
-	stmt, err := tx.PrepareContext(ctx, `
-	INSERT INTO file_manifests (id, repository_id, relative_path, language, extension, size, sha256, status, error_message, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(repository_id, relative_path) DO UPDATE SET
-		language=excluded.language,
-		extension=excluded.extension,
-		size=excluded.size,
-		sha256=excluded.sha256,
-		status=excluded.status,
-		error_message=excluded.error_message,
-		updated_at=excluded.updated_at
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, item := range items {
-		_, err := stmt.ExecContext(ctx,
-			item.ID, repoID, item.RelativePath, item.Language, item.Extension,
-			item.Size, item.SHA256, item.Status, item.ErrorMessage, item.UpdatedAt,
-		)
+	const batchSize = 500
+	for i := 0; i < len(items); i += batchSize {
+		end := i + batchSize
+		if end > len(items) {
+			end = len(items)
+		}
+		batch := items[i:end]
+		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
+		stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO file_manifests (id, repository_id, relative_path, language, extension, size, sha256, status, error_message, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(repository_id, relative_path) DO UPDATE SET
+			language=excluded.language,
+			extension=excluded.extension,
+			size=excluded.size,
+			sha256=excluded.sha256,
+			status=excluded.status,
+			error_message=excluded.error_message,
+			updated_at=excluded.updated_at
+		`)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		for _, item := range batch {
+			_, err := stmt.ExecContext(ctx,
+				item.ID, repoID, item.RelativePath, item.Language, item.Extension,
+				item.Size, item.SHA256, item.Status, item.ErrorMessage, item.UpdatedAt,
+			)
+			if err != nil {
+				stmt.Close()
+				tx.Rollback()
+				return err
+			}
+		}
+		stmt.Close()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
-
-	return tx.Commit()
+	return nil
 }
 
 func (s *SQLiteStorage) GetManifestForRepository(ctx context.Context, repoID string) ([]*models.FileManifestItem, error) {
@@ -558,49 +572,62 @@ func (s *SQLiteStorage) GetManifestForRepository(ctx context.Context, repoID str
 // CodeIntelligenceStore implementations
 
 func (s *SQLiteStorage) SaveSymbols(ctx context.Context, repoID string, symbols []*models.Symbol) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
+	if len(symbols) == 0 {
+		return nil
 	}
-	defer tx.Rollback()
-
-	stmt, err := tx.PrepareContext(ctx, `
-	INSERT INTO symbols (id, repository_id, file_id, relative_path, name, qualified_name, kind, parent_id, start_line, start_column, end_line, end_column, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(id) DO UPDATE SET
-		name=excluded.name,
-		qualified_name=excluded.qualified_name,
-		kind=excluded.kind,
-		parent_id=excluded.parent_id,
-		start_line=excluded.start_line,
-		start_column=excluded.start_column,
-		end_line=excluded.end_line,
-		end_column=excluded.end_column,
-		updated_at=excluded.updated_at
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, sym := range symbols {
-		var parentID sql.NullString
-		if sym.ParentID != "" {
-			parentID.String = sym.ParentID
-			parentID.Valid = true
+	const batchSize = 500
+	for i := 0; i < len(symbols); i += batchSize {
+		end := i + batchSize
+		if end > len(symbols) {
+			end = len(symbols)
 		}
-
-		_, err := stmt.ExecContext(ctx,
-			sym.ID, repoID, sym.FileID, sym.RelativePath, sym.Name, sym.QualifiedName,
-			string(sym.Kind), parentID, sym.Location.StartLine, sym.Location.StartColumn,
-			sym.Location.EndLine, sym.Location.EndColumn, sym.UpdatedAt,
-		)
+		batch := symbols[i:end]
+		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
-	}
+		stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO symbols (id, repository_id, file_id, relative_path, name, qualified_name, kind, parent_id, start_line, start_column, end_line, end_column, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name=excluded.name,
+			qualified_name=excluded.qualified_name,
+			kind=excluded.kind,
+			parent_id=excluded.parent_id,
+			start_line=excluded.start_line,
+			start_column=excluded.start_column,
+			end_line=excluded.end_line,
+			end_column=excluded.end_column,
+			updated_at=excluded.updated_at
+		`)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		for _, sym := range batch {
+			var parentID sql.NullString
+			if sym.ParentID != "" {
+				parentID.String = sym.ParentID
+				parentID.Valid = true
+			}
 
-	return tx.Commit()
+			_, err := stmt.ExecContext(ctx,
+				sym.ID, repoID, sym.FileID, sym.RelativePath, sym.Name, sym.QualifiedName,
+				string(sym.Kind), parentID, sym.Location.StartLine, sym.Location.StartColumn,
+				sym.Location.EndLine, sym.Location.EndColumn, sym.UpdatedAt,
+			)
+			if err != nil {
+				stmt.Close()
+				tx.Rollback()
+				return err
+			}
+		}
+		stmt.Close()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *SQLiteStorage) GetSymbolsForRepository(ctx context.Context, repoID string) ([]*models.Symbol, error) {
@@ -631,42 +658,55 @@ func (s *SQLiteStorage) GetSymbolsForRepository(ctx context.Context, repoID stri
 }
 
 func (s *SQLiteStorage) SaveRelationships(ctx context.Context, repoID string, rels []*models.Relationship) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
+	if len(rels) == 0 {
+		return nil
 	}
-	defer tx.Rollback()
-
-	stmt, err := tx.PrepareContext(ctx, `
-	INSERT INTO relationships (id, repository_id, source_id, target_id, target_kind, type, status, file_id, start_line, start_column, end_line, end_column, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(id) DO UPDATE SET
-		target_kind=excluded.target_kind,
-		type=excluded.type,
-		status=excluded.status,
-		start_line=excluded.start_line,
-		start_column=excluded.start_column,
-		end_line=excluded.end_line,
-		end_column=excluded.end_column,
-		updated_at=excluded.updated_at
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, rel := range rels {
-		_, err := stmt.ExecContext(ctx,
-			rel.ID, repoID, rel.SourceID, rel.TargetID, string(rel.TargetKind),
-			string(rel.Type), string(rel.Status), rel.FileID, rel.Location.StartLine,
-			rel.Location.StartColumn, rel.Location.EndLine, rel.Location.EndColumn, rel.UpdatedAt,
-		)
+	const batchSize = 500
+	for i := 0; i < len(rels); i += batchSize {
+		end := i + batchSize
+		if end > len(rels) {
+			end = len(rels)
+		}
+		batch := rels[i:end]
+		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
+		stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO relationships (id, repository_id, source_id, target_id, target_kind, type, status, file_id, start_line, start_column, end_line, end_column, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			target_kind=excluded.target_kind,
+			type=excluded.type,
+			status=excluded.status,
+			start_line=excluded.start_line,
+			start_column=excluded.start_column,
+			end_line=excluded.end_line,
+			end_column=excluded.end_column,
+			updated_at=excluded.updated_at
+		`)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		for _, rel := range batch {
+			_, err := stmt.ExecContext(ctx,
+				rel.ID, repoID, rel.SourceID, rel.TargetID, string(rel.TargetKind),
+				string(rel.Type), string(rel.Status), rel.FileID, rel.Location.StartLine,
+				rel.Location.StartColumn, rel.Location.EndLine, rel.Location.EndColumn, rel.UpdatedAt,
+			)
+			if err != nil {
+				stmt.Close()
+				tx.Rollback()
+				return err
+			}
+		}
+		stmt.Close()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
-
-	return tx.Commit()
+	return nil
 }
 
 func (s *SQLiteStorage) GetRelationshipsForRepository(ctx context.Context, repoID string) ([]*models.Relationship, error) {
@@ -1004,4 +1044,90 @@ func (s *SQLiteStorage) SaveIndexData(
 	}
 
 	return tx.Commit()
+}
+
+func (s *SQLiteStorage) GetRepositoryStats(ctx context.Context, repoID string) (*models.RepositoryStats, error) {
+	stats := &models.RepositoryStats{
+		RepositoryID: repoID,
+		Languages:    make(map[string]int),
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT relative_path, language, status
+		FROM file_manifests
+		WHERE repository_id = ?
+	`, repoID)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to query file_manifests for stats: %w", err)
+	}
+
+	folderSet := make(map[string]bool)
+
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var relPath, lang, statusStr string
+			if err := rows.Scan(&relPath, &lang, &statusStr); err != nil {
+				continue
+			}
+			stats.FilesDiscovered++
+
+			switch models.FileStatus(statusStr) {
+			case models.FileStatusIndexed:
+				stats.FilesIndexed++
+			case models.FileStatusFailed:
+				stats.FilesFailed++
+			default:
+				stats.FilesSkipped++
+			}
+
+			if lang != "" {
+				stats.Languages[lang]++
+			}
+
+			cleanPath := filepath.ToSlash(filepath.Clean(relPath))
+			dir := filepath.Dir(cleanPath)
+			for dir != "" && dir != "." && dir != "/" {
+				folderSet[dir] = true
+				nextDir := filepath.Dir(dir)
+				if nextDir == dir {
+					break
+				}
+				dir = nextDir
+			}
+		}
+	}
+
+	stats.FoldersDiscovered = len(folderSet)
+
+	latestJob, _ := s.GetLatestIndexJobForRepo(ctx, repoID)
+	if latestJob != nil {
+		if latestJob.FilesDiscovered > stats.FilesDiscovered {
+			stats.FilesDiscovered = latestJob.FilesDiscovered
+		}
+		if latestJob.FilesSkipped > stats.FilesSkipped {
+			stats.FilesSkipped = latestJob.FilesSkipped
+		}
+		if latestJob.FilesFailed > stats.FilesFailed {
+			stats.FilesFailed = latestJob.FilesFailed
+		}
+	}
+
+	var totalSymbols int
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM symbols WHERE repository_id = ?
+	`, repoID).Scan(&totalSymbols)
+	if err == nil {
+		stats.TotalSymbols = totalSymbols
+	}
+
+	var totalRels int
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM relationships WHERE repository_id = ?
+	`, repoID).Scan(&totalRels)
+	if err == nil {
+		stats.TotalRelationships = totalRels
+	}
+
+	return stats, nil
 }

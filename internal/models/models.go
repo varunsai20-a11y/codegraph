@@ -94,6 +94,18 @@ type IndexStats struct {
 	IndexedBytes     int64         `json:"indexed_bytes"`
 }
 
+type RepositoryStats struct {
+	RepositoryID       string         `json:"repository_id"`
+	FilesDiscovered    int            `json:"files_discovered"`
+	FilesIndexed       int            `json:"files_indexed"`
+	FilesSkipped       int            `json:"files_skipped"`
+	FilesFailed        int            `json:"files_failed"`
+	FoldersDiscovered  int            `json:"folders_discovered"`
+	TotalSymbols       int            `json:"total_symbols"`
+	TotalRelationships int            `json:"total_relationships"`
+	Languages          map[string]int `json:"languages"`
+}
+
 // Phase 2 Static Code Intelligence Domain Models
 
 type SymbolKind string

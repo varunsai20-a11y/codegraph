@@ -93,3 +93,28 @@ func TestFileDiscoveryAndFiltering(t *testing.T) {
 		}
 	}
 }
+
+func TestGitignoreDirectoryBoundaryMatching(t *testing.T) {
+	patterns := []string{"internal/", "!/skills/"}
+
+	tests := []struct {
+		relPath string
+		want    bool
+	}{
+		{"internal", true},
+		{"internal/foo.go", true},
+		{"src/internal", true},
+		{"src/internal/bar.go", true},
+		{"internal-test", false},
+		{"internal-test/foo.go", false},
+		{"foo/internal-bar", false},
+		{"skills/SKILL.md", false},
+	}
+
+	for _, tt := range tests {
+		got := matchesAnyPattern(tt.relPath, patterns)
+		if got != tt.want {
+			t.Errorf("matchesAnyPattern(%q, %v) = %v; want %v", tt.relPath, patterns, got, tt.want)
+		}
+	}
+}

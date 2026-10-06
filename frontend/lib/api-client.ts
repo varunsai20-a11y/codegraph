@@ -14,6 +14,7 @@ import {
   ArchitectureDiagram,
   ChatMessage,
   ExplanationResponse,
+  RepositoryStats,
 } from "./types";
 
 export class CodeGraphAPIClient {
@@ -28,7 +29,8 @@ export class CodeGraphAPIClient {
     options?: RequestInit & { signal?: AbortSignal; timeoutMs?: number }
   ): Promise<T> {
     const controller = new AbortController();
-    const timeoutMs = options?.timeoutMs || 60000;
+    const defaultTimeoutSec = parseInt(process.env.NEXT_PUBLIC_LLM_TIMEOUT_SECONDS || "180", 10);
+    const timeoutMs = options?.timeoutMs || (defaultTimeoutSec * 1000);
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     let signal = controller.signal;
@@ -112,6 +114,10 @@ export class CodeGraphAPIClient {
     return this.request<FileManifestItem[]>(`/api/repositories/${id}/files`, { signal });
   }
 
+  async getRepositoryStats(id: string, signal?: AbortSignal): Promise<RepositoryStats> {
+    return this.request<RepositoryStats>(`/api/repositories/${id}/stats`, { signal });
+  }
+
   async getFileContent(
     id: string,
     relativePath: string,
@@ -185,11 +191,12 @@ export class CodeGraphAPIClient {
     },
     signal?: AbortSignal
   ): Promise<ExplanationResponse> {
+    const timeoutSec = parseInt(process.env.NEXT_PUBLIC_LLM_TIMEOUT_SECONDS || "180", 10);
     return this.request<ExplanationResponse>(`/api/repositories/${id}/explain`, {
       method: "POST",
       body: JSON.stringify(payload),
       signal,
-      timeoutMs: 60000,
+      timeoutMs: timeoutSec * 1000,
     });
   }
 

@@ -111,6 +111,14 @@ func (ds *DiscoveryScanner) loadGitignorePatterns(absRoot string) []string {
 func matchesAnyPattern(relPath string, patterns []string) bool {
 	base := filepath.Base(relPath)
 	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" || strings.HasPrefix(pattern, "#") {
+			continue
+		}
+		// Skip negation patterns in simple ignore matcher
+		if strings.HasPrefix(pattern, "!") {
+			continue
+		}
 		pattern = strings.TrimPrefix(pattern, "/")
 		if matched, _ := filepath.Match(pattern, relPath); matched {
 			return true
@@ -118,8 +126,11 @@ func matchesAnyPattern(relPath string, patterns []string) bool {
 		if matched, _ := filepath.Match(pattern, base); matched {
 			return true
 		}
-		if strings.HasSuffix(pattern, "/") && strings.HasPrefix(relPath, strings.TrimSuffix(pattern, "/")) {
-			return true
+		if strings.HasSuffix(pattern, "/") {
+			dirName := strings.TrimSuffix(pattern, "/")
+			if relPath == dirName || strings.HasPrefix(relPath, dirName+"/") || base == dirName || strings.Contains(relPath, "/"+dirName+"/") {
+				return true
+			}
 		}
 	}
 	return false

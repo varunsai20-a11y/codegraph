@@ -84,6 +84,11 @@ func DefaultIntentWeights() map[string]RetrieverWeights {
 			Semantic: 1.0,
 			Graph:    0.4,
 		},
+		IntentFileQuery: {
+			Lexical:  1.0,
+			Semantic: 0.5,
+			Graph:    0.8,
+		},
 		IntentGeneralRepositoryQuery: {
 			Lexical:  1.0,
 			Semantic: 1.0,

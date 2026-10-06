@@ -329,6 +329,15 @@ func (r *LexicalRetriever) calculateFileScore(f *models.FileManifestItem, query,
 	lowerPath := strings.ToLower(f.RelativePath)
 	baseName := strings.ToLower(filepath.Base(f.RelativePath))
 	ext := strings.ToLower(filepath.Ext(f.RelativePath))
+
+	targetFile := ExtractTargetFile(query)
+	if targetFile != "" {
+		cleanTarget := strings.ToLower(targetFile)
+		if lowerPath == cleanTarget || baseName == cleanTarget || strings.HasSuffix(lowerPath, "/"+cleanTarget) {
+			return 150.0
+		}
+	}
+
 	score := 0.0
 
 	if query == f.RelativePath || lowerQuery == lowerPath || lowerQuery == baseName {
@@ -343,13 +352,14 @@ func (r *LexicalRetriever) calculateFileScore(f *models.FileManifestItem, query,
 	})
 	matchedTerms := 0
 	for _, w := range words {
-		if len(w) < 3 || isStopWord(w) {
+		cleanW := CleanToken(w)
+		if len(cleanW) < 3 || isStopWord(cleanW) {
 			continue
 		}
-		if baseName == w || strings.TrimSuffix(baseName, ext) == w {
+		if baseName == cleanW || strings.TrimSuffix(baseName, ext) == cleanW {
 			score += 45.0
 			matchedTerms++
-		} else if strings.Contains(baseName, w) || strings.Contains(lowerPath, w) {
+		} else if strings.Contains(baseName, cleanW) || strings.Contains(lowerPath, cleanW) {
 			score += 25.0
 			matchedTerms++
 		}

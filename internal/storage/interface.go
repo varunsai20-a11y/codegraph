@@ -14,6 +14,7 @@ type RepositoryStore interface {
 	GetRepositoryBySourceURL(ctx context.Context, sourceURL string) (*models.Repository, error)
 	ListRepositories(ctx context.Context) ([]*models.Repository, error)
 	UpdateRepositoryStatus(ctx context.Context, id string, status models.RepositoryStatus) error
+	GetRepositoryStats(ctx context.Context, repoID string) (*models.RepositoryStats, error)
 }
 
 type IndexJobStore interface {

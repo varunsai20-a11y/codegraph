@@ -23,6 +23,7 @@ export const Header: React.FC = () => {
     repositories,
     activeRepoID,
     activeRepo,
+    activeRepoStats,
     selectRepository,
     fetchRepositories,
     isLoadingRepos,
@@ -106,20 +107,27 @@ export const Header: React.FC = () => {
             </select>
 
             {activeRepo && (
-              <span
-                className={`text-[9px] font-mono font-bold tracking-wider px-2 py-0.5 rounded-sm border flex items-center gap-1.5 ${repoStatusStyle}`}
-              >
+              <div className="flex items-center space-x-1.5">
                 <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    repoStatus === "INDEXED"
-                      ? "bg-emerald-400"
-                      : repoStatus === "INDEXING"
-                      ? "bg-amber-400 animate-pulse"
-                      : "bg-cyan-400"
-                  }`}
-                />
-                <span>● {repoStatusText}</span>
-              </span>
+                  className={`text-[9px] font-mono font-bold tracking-wider px-2 py-0.5 rounded-sm border flex items-center gap-1.5 ${repoStatusStyle}`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      repoStatus === "INDEXED"
+                        ? "bg-emerald-400"
+                        : repoStatus === "INDEXING"
+                        ? "bg-amber-400 animate-pulse"
+                        : "bg-cyan-400"
+                    }`}
+                  />
+                  <span>● {repoStatusText}</span>
+                </span>
+                {activeRepoStats && (
+                  <span className="text-[9px] font-mono text-gray-300 px-2 py-0.5 rounded-sm bg-background border border-border">
+                    {activeRepoStats.files_indexed} files · {activeRepoStats.folders_discovered} folders
+                  </span>
+                )}
+              </div>
             )}
           </div>
         </div>

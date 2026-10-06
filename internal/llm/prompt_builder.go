@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"codegraph/internal/models"
-	"codegraph/internal/retrieval"
 )
 
 // GroundedPromptBuilder constructs prompt-injection-resistant LLM requests using system instructions and formatted evidence packages.
@@ -27,7 +26,8 @@ func (b *GroundedPromptBuilder) BuildPrompt(req *models.ExplanationRequest, pkg 
 		return LLMRequest{}, fmt.Errorf("%w: request repo '%s' != package repo '%s'", models.ErrRepositoryMismatch, req.RepositoryScope.RepositoryID, pkg.RepositoryID)
 	}
 
-	groundedCtx := retrieval.BuildGroundedContext(pkg)
+	analysisCtx := BuildAnalysisContext(pkg)
+	groundedCtx := analysisCtx.String()
 
 	if len(req.History) > 0 {
 		historyWindow := req.History

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -40,7 +42,9 @@ func NewHTTPLLMProvider(config LLMConfig, client *http.Client) (*HTTPLLMProvider
 		protocol = &GeminiAdapter{}
 	case "anthropic":
 		protocol = &AnthropicAdapter{}
-	case "openai", "ollama":
+	case "ollama":
+		protocol = &OllamaAdapter{}
+	case "openai":
 		protocol = &OpenAIAdapter{}
 	default:
 		protocol = &OpenAIAdapter{}
@@ -66,6 +70,8 @@ func (p *HTTPLLMProvider) Generate(ctx context.Context, req LLMRequest) (*LLMRes
 		return nil, fmt.Errorf("%w: endpoint URL missing for HTTP provider %s", ErrInvalidConfiguration, p.config.Provider)
 	}
 
+	log.Printf("[LLM] Starting request to provider=%s model=%s endpoint=%s (timeout=%v)", p.config.Provider, p.config.Model, p.config.Endpoint, p.config.Timeout)
+
 	var lastErr error
 	maxRetries := 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -82,10 +88,18 @@ func (p *HTTPLLMProvider) Generate(ctx context.Context, req LLMRequest) (*LLMRes
 			return nil, fmt.Errorf("failed to format request for %s: %w", p.config.Provider, err)
 		}
 
+		genStart := time.Now()
 		resp, err := p.client.Do(httpReq)
+		genDuration := time.Since(genStart)
+
 		if err != nil {
+			log.Printf("[LLM] Provider %s HTTP request failed after %v: %v", p.config.Provider, genDuration, err)
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("%w: %v", ErrProviderTimeout, ctx.Err())
+			}
+			errStr := err.Error()
+			if errors.Is(err, context.DeadlineExceeded) || strings.Contains(errStr, "Client.Timeout") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded") {
+				return nil, fmt.Errorf("%w: %v", ErrProviderTimeout, err)
 			}
 			lastErr = fmt.Errorf("%w: provider %s HTTP request failed: %v", ErrProviderUnavailable, p.config.Provider, err)
 			continue
@@ -100,6 +114,10 @@ func (p *HTTPLLMProvider) Generate(ctx context.Context, req LLMRequest) (*LLMRes
 			}
 			return nil, err
 		}
+
+		log.Printf("[LLM] Provider %s completed in %v (prompt_tokens=%d completion_tokens=%d total_tokens=%d)",
+			p.config.Provider, genDuration, llmResp.Usage.PromptTokens, llmResp.Usage.CompletionTokens, llmResp.Usage.TotalTokens)
+
 		return llmResp, nil
 	}
 
@@ -313,4 +331,112 @@ func (a *AnthropicAdapter) ParseResponse(config LLMConfig, resp *http.Response) 
 			TotalTokens:      parsed.Usage.InputTokens + parsed.Usage.OutputTokens,
 		},
 	}, nil
+}
+
+// OllamaAdapter handles local Ollama REST chat API (/api/chat & /v1/chat/completions) wire protocol.
+type OllamaAdapter struct{}
+
+func (a *OllamaAdapter) FormatRequest(ctx context.Context, config LLMConfig, req LLMRequest) (*http.Request, error) {
+	endpoint := config.Endpoint
+	if endpoint == "" {
+		endpoint = "http://localhost:11434/api/chat"
+	} else if strings.HasSuffix(endpoint, "/") {
+		endpoint = endpoint + "api/chat"
+	} else if !strings.Contains(endpoint, "/api/") && !strings.Contains(endpoint, "/v1/") {
+		endpoint = endpoint + "/api/chat"
+	}
+
+	model := config.Model
+	if model == "" {
+		model = "qwen2.5:3b"
+	}
+
+	payload := map[string]interface{}{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": req.SystemInstruction},
+			{"role": "user", "content": fmt.Sprintf("Query: %s\n\n%s", req.UserQuery, req.GroundedContext)},
+		},
+		"stream": false,
+	}
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	return httpReq, nil
+}
+
+func (a *OllamaAdapter) ParseResponse(config LLMConfig, resp *http.Response) (*LLMResponse, error) {
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("%w: Ollama provider returned HTTP status %d: %s", ErrProviderUnavailable, resp.StatusCode, string(body))
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read response from Ollama: %v", ErrMalformedResponse, err)
+	}
+
+	// 1. Try parsing Ollama native /api/chat format
+	var nativeParsed struct {
+		Model   string `json:"model"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+		PromptEvalCount int    `json:"prompt_eval_count"`
+		EvalCount       int    `json:"eval_count"`
+		Done            bool   `json:"done"`
+		Error           string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(body, &nativeParsed); err == nil && nativeParsed.Message.Content != "" {
+		if nativeParsed.Error != "" {
+			return nil, fmt.Errorf("%w: Ollama error: %s", ErrProviderUnavailable, nativeParsed.Error)
+		}
+		return &LLMResponse{
+			Content:  nativeParsed.Message.Content,
+			Provider: "ollama",
+			Model:    config.Model,
+			Usage: TokenUsage{
+				PromptTokens:     nativeParsed.PromptEvalCount,
+				CompletionTokens: nativeParsed.EvalCount,
+				TotalTokens:      nativeParsed.PromptEvalCount + nativeParsed.EvalCount,
+			},
+		}, nil
+	}
+
+	// 2. Try parsing OpenAI format (/v1/chat/completions)
+	var openAIParsed struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &openAIParsed); err == nil && len(openAIParsed.Choices) > 0 && openAIParsed.Choices[0].Message.Content != "" {
+		return &LLMResponse{
+			Content:  openAIParsed.Choices[0].Message.Content,
+			Provider: "ollama",
+			Model:    config.Model,
+			Usage: TokenUsage{
+				PromptTokens:     openAIParsed.Usage.PromptTokens,
+				CompletionTokens: openAIParsed.Usage.CompletionTokens,
+				TotalTokens:      openAIParsed.Usage.TotalTokens,
+			},
+		}, nil
+	}
+
+	return nil, fmt.Errorf("%w: invalid or empty response format from Ollama endpoint", ErrMalformedResponse)
 }

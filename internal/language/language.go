@@ -19,21 +19,58 @@ const (
 	LangJava       Language = "Java"
 	LangTSX        Language = "TSX"
 	LangJSX        Language = "JSX"
+	LangJSON       Language = "JSON"
+	LangMarkdown   Language = "Markdown"
+	LangYAML       Language = "YAML"
+	LangTOML       Language = "TOML"
+	LangSQL        Language = "SQL"
+	LangShell      Language = "Shell"
+	LangC          Language = "C"
+	LangCPP        Language = "C++"
+	LangRust       Language = "Rust"
+	LangHTML       Language = "HTML"
+	LangCSS        Language = "CSS"
 	LangUnknown    Language = "UNKNOWN"
 )
 
 // ExtensionMap provides quick extension lookup.
 var ExtensionMap = map[string]Language{
-	".ts":   LangTypeScript,
-	".tsx":  LangTSX,
-	".js":   LangJavaScript,
-	".jsx":  LangJSX,
-	".mjs":  LangJavaScript,
-	".cjs":  LangJavaScript,
-	".py":   LangPython,
-	".pyw":  LangPython,
-	".go":   LangGo,
-	".java": LangJava,
+	".ts":    LangTypeScript,
+	".mts":   LangTypeScript,
+	".cts":   LangTypeScript,
+	".tsx":   LangTSX,
+	".js":    LangJavaScript,
+	".mjs":   LangJavaScript,
+	".cjs":   LangJavaScript,
+	".jsx":   LangJSX,
+	".astro": LangTypeScript,
+	".py":    LangPython,
+	".pyw":   LangPython,
+	".go":    LangGo,
+	".java":  LangJava,
+	".json":  LangJSON,
+	".jsonc": LangJSON,
+	".md":    LangMarkdown,
+	".mdx":   LangMarkdown,
+	".yaml":  LangYAML,
+	".yml":   LangYAML,
+	".toml":  LangTOML,
+	".sql":   LangSQL,
+	".sh":    LangShell,
+	".bash":  LangShell,
+	".zsh":   LangShell,
+	".c":     LangC,
+	".h":     LangC,
+	".cpp":   LangCPP,
+	".hpp":   LangCPP,
+	".cc":    LangCPP,
+	".cxx":   LangCPP,
+	".rs":    LangRust,
+	".html":  LangHTML,
+	".htm":   LangHTML,
+	".css":   LangCSS,
+	".scss":  LangCSS,
+	".less":  LangCSS,
 }
 
 type Detector struct{}

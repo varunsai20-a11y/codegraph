@@ -61,8 +61,11 @@ func NewServer(cfg *config.Config, store storage.Storage, wsMgr *repository.Work
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	timeoutSec := 180
+	if s.cfg != nil && s.cfg.LLM.TimeoutSeconds > 0 {
+		timeoutSec = s.cfg.LLM.TimeoutSeconds
+	}
+	r.Use(middleware.Timeout(time.Duration(timeoutSec) * time.Second))
 	r.Use(s.corsMiddleware)
 
 	s.routes()
@@ -121,6 +124,7 @@ func (s *Server) routes() {
 		r.Get("/repositories/{id}/symbols", s.handleGetSymbols)
 		r.Get("/repositories/{id}/relationships", s.handleGetRelationships)
 		r.Get("/repositories/{id}/analysis", s.handleGetAnalysisSummary)
+		r.Get("/repositories/{id}/stats", s.handleGetRepositoryStats)
 		r.Get("/repositories/{id}/graph", s.handleGetGraph)
 		r.Get("/repositories/{id}/graph/callers", s.handleGetGraphCallers)
 		r.Get("/repositories/{id}/graph/callees", s.handleGetGraphCallees)
@@ -455,14 +459,34 @@ func (s *Server) handleGetAnalysisSummary(w http.ResponseWriter, r *http.Request
 	id := chi.URLParam(r, "id")
 	symbols, _ := s.store.GetSymbolsForRepository(r.Context(), id)
 	rels, _ := s.store.GetRelationshipsForRepository(r.Context(), id)
+	stats, _ := s.store.GetRepositoryStats(r.Context(), id)
 
-	s.respondJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"repository_id":       id,
 		"total_symbols":       len(symbols),
 		"total_relationships": len(rels),
 		"symbols":             symbols,
 		"relationships":       rels,
-	})
+	}
+	if stats != nil {
+		resp["files_discovered"] = stats.FilesDiscovered
+		resp["files_indexed"] = stats.FilesIndexed
+		resp["files_skipped"] = stats.FilesSkipped
+		resp["files_failed"] = stats.FilesFailed
+		resp["folders_discovered"] = stats.FoldersDiscovered
+		resp["languages"] = stats.Languages
+	}
+	s.respondJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleGetRepositoryStats(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	stats, err := s.store.GetRepositoryStats(r.Context(), id)
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, stats)
 }
 
 func (s *Server) handleGetGraph(w http.ResponseWriter, r *http.Request) {
@@ -917,15 +941,34 @@ func (s *Server) handleExplainRepository(w http.ResponseWriter, r *http.Request)
 		svc = llm.NewGroundedExplanationService(provider, nil, composer, nil)
 	}
 
-	resp, err := svc.ExplainRequest(r.Context(), expReq)
+	tSec := 180
+	if s.cfg != nil && s.cfg.LLM.TimeoutSeconds > 0 {
+		tSec = s.cfg.LLM.TimeoutSeconds
+	}
+
+	reqCtx, reqCancel := context.WithTimeout(r.Context(), time.Duration(tSec)*time.Second)
+	defer reqCancel()
+
+	resp, err := svc.ExplainRequest(reqCtx, expReq)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, llm.ErrProviderTimeout) {
+			log.Printf("[LLM] Explanation request timed out: %v", err)
+			modelName := "qwen2.5:3b"
+			if s.cfg != nil && s.cfg.Ollama.Model != "" {
+				modelName = s.cfg.Ollama.Model
+			}
+			s.respondJSON(w, http.StatusGatewayTimeout, map[string]interface{}{
+				"error":         fmt.Sprintf("Provider timeout: Ollama/%s did not complete within the configured %d-second limit.", modelName, tSec),
+				"provider_mode": "LLM_PROVIDER_ERROR",
+				"status":        "ERROR",
+				"details":       err.Error(),
+			})
 			return
 		}
-		if errors.Is(err, llm.ErrProviderUnavailable) || errors.Is(err, llm.ErrProviderTimeout) ||
+		if errors.Is(err, llm.ErrProviderUnavailable) ||
 			errors.Is(err, llm.ErrAuthFailed) || errors.Is(err, llm.ErrModelUnavailable) ||
 			errors.Is(err, llm.ErrRateLimited) || errors.Is(err, llm.ErrMalformedResponse) {
-			log.Printf("[LLM] Gemini request failed: %v", err)
+			log.Printf("[LLM] Explanation request failed: %v", err)
 			s.respondJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
 				"error":         fmt.Sprintf("CodeGraph AI Explanation Error: %v", err),
 				"provider_mode": "LLM_PROVIDER_ERROR",

@@ -20,7 +20,7 @@ func TestDetectLanguage(t *testing.T) {
 		{"scripts/build.py", LangPython},
 		{"main.go", LangGo},
 		{"App.java", LangJava},
-		{"README.md", LangUnknown},
+		{"README.md", LangMarkdown},
 		{"Makefile", LangUnknown},
 	}
 

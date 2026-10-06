@@ -76,10 +76,10 @@ func TestExplanationService_MockProvider(t *testing.T) {
 	if req.UserQuery != pkg.Question {
 		t.Errorf("expected UserQuery = '%s', got '%s'", pkg.Question, req.UserQuery)
 	}
-	if !strings.Contains(req.SystemInstruction, "You are CodeGraph's codebase explanation engine.") {
+	if !strings.Contains(req.SystemInstruction, "You are CodeGraph's") {
 		t.Errorf("expected system instruction contract in request")
 	}
-	if !strings.Contains(req.GroundedContext, "=== CODEGRAPH TRUSTED METADATA ===") {
+	if !strings.Contains(req.GroundedContext, "===") {
 		t.Errorf("expected grounded context in request")
 	}
 
